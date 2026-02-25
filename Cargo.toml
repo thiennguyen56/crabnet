@@ -1,0 +1,12 @@
+[package]
+name = "crabnet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tun-rs = { version = "2", features = ["async"] }
+tokio = { version = "1", features = ["full"] }
+clap = "4.5.60"
+serde = "1.0.228"
+anyhow = "1.0.102"
+log = "0.4.29"
