@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 tun-rs = { version = "2", features = ["async"] }
 tokio = { version = "1", features = ["full"] }
-clap = "4.5.60"
-serde = "1.0.228"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"]}
 anyhow = "1.0.102"
 log = "0.4.29"
+toml = "1.0.3"
+env_logger = "0.11.9"
