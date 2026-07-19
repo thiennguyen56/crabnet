@@ -9,7 +9,10 @@ mod tun;
 mod utils;
 
 use clap::Parser;
-use config::{Args, Config};
+use config::{Args, Config, Mode};
+
+use client::Client;
+use server::Server;
 
 fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
@@ -23,5 +26,25 @@ fn main() -> Result<(), anyhow::Error> {
     log::info!("CrabNet VPN starting...");
     log::debug!("Config: {:?}", config);
 
+    match config.mode {
+        Mode::Client => {
+            log::info!("client");
+            let client = Client::new();
+            let response = client.start();
+            match response {
+                Ok(()) => {
+                    log::info!("Receiving result: {}", "Ok");
+                }
+                Err(e) => {
+                    log::error!("Receiving error: {}", e);
+                }
+            }
+        }
+        Mode::Server => {
+            log::info!("server");
+            let server = Server::new();
+            server.start();
+        }
+    }
     Ok(())
 }
