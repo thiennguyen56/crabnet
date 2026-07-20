@@ -1,8 +1,9 @@
-mode = "server"
-local_addr = "0.0.0.0"
-local_port = 51820
-remote_addr = "127.0.0.1"
-remote_port = 51820
-key = "my-secret-key"
-tun = "crabnet0"
 log_level = "debug"
+
+[mode]
+type = "server"
+bind_addr = "127.0.0.1:51821"
+
+[tun]
+name = "crabnet0"
+address = "10.0.0.1"

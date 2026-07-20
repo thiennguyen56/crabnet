@@ -1,18 +1,33 @@
+use super::config::{Config, ModeConfig};
 use std::{net::UdpSocket, time::Duration};
 
-pub struct Client {}
+pub struct Client {
+    config: Config,
+}
 
 impl Client {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(conf: &Config) -> Self {
+        Self {
+            config: conf.clone(),
+        }
     }
 
     pub fn start(&self) -> std::io::Result<()> {
-        let socket = UdpSocket::bind("0.0.0.0")?;
+        let ModeConfig::Client {
+            bind_addr,
+            server_addr,
+        } = &self.config.mode
+        else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "client requires client mode configuration",
+            ));
+        };
+
+        let socket = UdpSocket::bind(bind_addr)?;
 
         let _ = socket.set_read_timeout(Some(Duration::from_secs(3)));
 
-        let server_addr = "localhost:9001";
         let message = "Hello, server!";
 
         socket.send_to(message.as_bytes(), server_addr)?;

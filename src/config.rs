@@ -1,18 +1,19 @@
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::fs;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::str::FromStr;
 
-#[derive(ValueEnum, Clone, Debug, Deserialize, Copy)]
+const DEFAULT_PORT: u16 = 51820;
+
+#[derive(ValueEnum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Client,
     Server,
 }
 
-#[derive(ValueEnum, Clone, Debug, Deserialize, Copy)]
+#[derive(ValueEnum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Info,
@@ -28,26 +29,6 @@ impl LogLevel {
             LogLevel::Warn => log::LevelFilter::Warn,
             LogLevel::Debug => log::LevelFilter::Debug,
             LogLevel::Error => log::LevelFilter::Error,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-enum KeySource {
-    Direct(String),
-    File(PathBuf),
-}
-
-impl FromStr for KeySource {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(rest) = s.strip_prefix("file:") {
-            let path = PathBuf::from(rest);
-            let _key = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            Ok(KeySource::File(path))
-        } else {
-            Ok(KeySource::Direct(s.to_string()))
         }
     }
 }
@@ -72,101 +53,179 @@ pub struct Args {
     #[arg(value_enum, long, help = "Log level [default: info]")]
     log_level: Option<LogLevel>,
 
-    #[arg(value_parser, long)]
-    key: Option<KeySource>,
-
     #[arg(long, help = "TUN device name [default: crabnet0]")]
     tun: Option<String>,
+
+    #[arg(long, help = "TUN interface address [default: 10.0.0.1]")]
+    tun_address: Option<IpAddr>,
 
     #[arg(long)]
     config_path: Option<PathBuf>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
-    pub mode: Option<Mode>,
-    pub local_addr: Option<IpAddr>,
-    pub local_port: Option<u16>,
-    pub remote_addr: Option<IpAddr>,
-    pub remote_port: Option<u16>,
-    pub key: Option<String>,
-    pub tun: Option<String>,
-    pub log_level: Option<LogLevel>,
+    pub mode: ModeConfig,
+    pub tun: TunConfig,
+    pub log_level: LogLevel,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ModeConfig {
+    Client {
+        bind_addr: SocketAddr,
+        server_addr: SocketAddr,
+    },
+    Server {
+        bind_addr: SocketAddr,
+    },
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TunConfig {
+    pub name: String,
+    pub address: IpAddr,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            mode: ModeConfig::Client {
+                bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_PORT),
+                server_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT),
+            },
+            tun: TunConfig {
+                name: "crabnet0".to_string(),
+                address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            },
+            log_level: LogLevel::Info,
+        }
+    }
 }
 
 impl Config {
     pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
-        Ok(config)
+        Ok(toml::from_str(&content)?)
     }
 
     pub fn from_args(args: &Args) -> anyhow::Result<Self> {
-        let file_config = if let Some(path) = &args.config_path {
-            Some(Config::from_file(path)?)
+        let mut config = if let Some(path) = &args.config_path {
+            Self::from_file(path)?
         } else {
-            None
+            Self::default()
         };
 
-        Ok(Config {
-            mode: args.mode.or(file_config.as_ref().and_then(|c| c.mode)),
-            local_addr: args
-                .local_addr
-                .or(file_config.as_ref().and_then(|c| c.local_addr)),
-            local_port: args
-                .local_port
-                .or(file_config.as_ref().and_then(|c| c.local_port)),
-            remote_addr: args
-                .remote_addr
-                .or(file_config.as_ref().and_then(|c| c.remote_addr)),
-            remote_port: args
-                .remote_port
-                .or(file_config.as_ref().and_then(|c| c.remote_port)),
-            key: args
-                .key
-                .as_ref()
-                .map(|k| match k {
-                    KeySource::Direct(s) => s.clone(),
-                    KeySource::File(p) => p.to_string_lossy().to_string(),
-                })
-                .or(file_config.as_ref().and_then(|c| c.key.clone())),
-            tun: args
-                .tun
-                .clone()
-                .or(file_config.as_ref().and_then(|c| c.tun.clone())),
-            log_level: args
-                .log_level
-                .or(file_config.as_ref().and_then(|c| c.log_level)),
-        })
-    }
+        config.log_level = args.log_level.unwrap_or(config.log_level);
+        config.tun.name = args.tun.clone().unwrap_or(config.tun.name);
+        config.tun.address = args.tun_address.unwrap_or(config.tun.address);
 
-    pub fn resolve(self) -> anyhow::Result<ResolvedConfig> {
-        Ok(ResolvedConfig {
-            mode: self.mode.unwrap_or(Mode::Client),
-            local_addr: self
-                .local_addr
-                .unwrap_or(IpAddr::from_str("0.0.0.0").unwrap()),
-            local_port: self.local_port.unwrap_or(51820),
-            remote_addr: self
-                .remote_addr
-                .unwrap_or(IpAddr::from_str("127.0.0.1").unwrap()),
-            remote_port: self.remote_port.unwrap_or(51820),
-            key: self.key,
-            tun: self.tun.unwrap_or("crabnet0".to_string()),
-            log_level: self.log_level.unwrap_or(LogLevel::Info),
-        })
+        let default = Self::default();
+        let selected_mode = args.mode.unwrap_or_else(|| config.mode.kind());
+        config.mode = match selected_mode {
+            Mode::Client => {
+                let (bind_addr, server_addr) = match config.mode {
+                    ModeConfig::Client {
+                        bind_addr,
+                        server_addr,
+                    } => (bind_addr, server_addr),
+                    ModeConfig::Server { bind_addr } => {
+                        let ModeConfig::Client { server_addr, .. } = default.mode else {
+                            unreachable!()
+                        };
+                        (bind_addr, server_addr)
+                    }
+                };
+
+                ModeConfig::Client {
+                    bind_addr: socket_addr(bind_addr, args.local_addr, args.local_port),
+                    server_addr: socket_addr(server_addr, args.remote_addr, args.remote_port),
+                }
+            }
+            Mode::Server => {
+                let bind_addr = config.mode.bind_addr();
+                ModeConfig::Server {
+                    bind_addr: socket_addr(bind_addr, args.local_addr, args.local_port),
+                }
+            }
+        };
+
+        Ok(config)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedConfig {
-    pub mode: Mode,
-    pub local_addr: IpAddr,
-    pub local_port: u16,
-    pub remote_addr: IpAddr,
-    pub remote_port: u16,
-    pub key: Option<String>, // key can still be optional
-    pub tun: String,
-    pub log_level: LogLevel,
+impl ModeConfig {
+    pub fn kind(&self) -> Mode {
+        match self {
+            Self::Client { .. } => Mode::Client,
+            Self::Server { .. } => Mode::Server,
+        }
+    }
+
+    pub fn bind_addr(&self) -> SocketAddr {
+        match self {
+            Self::Client { bind_addr, .. } | Self::Server { bind_addr } => *bind_addr,
+        }
+    }
+}
+
+fn socket_addr(current: SocketAddr, ip: Option<IpAddr>, port: Option<u16>) -> SocketAddr {
+    SocketAddr::new(
+        ip.unwrap_or_else(|| current.ip()),
+        port.unwrap_or(current.port()),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_client_config() {
+        let config: Config = toml::from_str(
+            r#"
+                log_level = "debug"
+
+                [mode]
+                type = "client"
+                bind_addr = "0.0.0.0:51820"
+                server_addr = "127.0.0.1:51821"
+
+                [tun]
+                name = "crabnet0"
+                address = "10.0.0.2"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.mode.kind(), Mode::Client);
+        assert_eq!(config.mode.bind_addr(), "0.0.0.0:51820".parse().unwrap());
+        assert_eq!(config.tun.address, "10.0.0.2".parse::<IpAddr>().unwrap());
+        assert_eq!(config.log_level, LogLevel::Debug);
+    }
+
+    #[test]
+    fn cli_overrides_default_config() {
+        let args = Args::try_parse_from([
+            "crabnet",
+            "--mode",
+            "server",
+            "--local-addr",
+            "127.0.0.1",
+            "--local-port",
+            "9001",
+            "--tun-address",
+            "10.0.0.1",
+        ])
+        .unwrap();
+
+        let config = Config::from_args(&args).unwrap();
+        assert_eq!(
+            config.mode,
+            ModeConfig::Server {
+                bind_addr: "127.0.0.1:9001".parse().unwrap()
+            }
+        );
+    }
 }

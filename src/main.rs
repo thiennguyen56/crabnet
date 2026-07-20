@@ -9,14 +9,14 @@ mod tun;
 mod utils;
 
 use clap::Parser;
-use config::{Args, Config, Mode};
+use config::{Args, Config, ModeConfig};
 
 use client::Client;
 use server::Server;
 
 fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
-    let config = Config::from_args(&args)?.resolve()?;
+    let config = Config::from_args(&args)?;
 
     // Initialize logging based on config log level
     env_logger::Builder::new()
@@ -26,10 +26,10 @@ fn main() -> Result<(), anyhow::Error> {
     log::info!("CrabNet VPN starting...");
     log::debug!("Config: {:?}", config);
 
-    match config.mode {
-        Mode::Client => {
+    match &config.mode {
+        ModeConfig::Client { .. } => {
             log::info!("client");
-            let client = Client::new();
+            let client = Client::new(&config);
             let response = client.start();
             match response {
                 Ok(()) => {
@@ -40,10 +40,10 @@ fn main() -> Result<(), anyhow::Error> {
                 }
             }
         }
-        Mode::Server => {
+        ModeConfig::Server { .. } => {
             log::info!("server");
-            let server = Server::new();
-            server.start();
+            let server = Server::new(&config);
+            server.start()?;
         }
     }
     Ok(())

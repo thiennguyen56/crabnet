@@ -1,16 +1,28 @@
+use super::config::{Config, ModeConfig};
 use std::net::UdpSocket;
 
-pub struct Server;
+pub struct Server {
+    config: Config,
+}
 
 impl Server {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(conf: &Config) -> Self {
+        Self {
+            config: conf.clone(),
+        }
     }
 
     pub fn start(&self) -> std::io::Result<()> {
-        let socket = UdpSocket::bind("0.0.0.0:9001")?;
+        let ModeConfig::Server { bind_addr } = &self.config.mode else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "server requires server mode configuration",
+            ));
+        };
 
-        log::info!("Server started on 0.0.0.0:9001");
+        let socket = UdpSocket::bind(bind_addr)?;
+
+        log::info!("Server started on {}", bind_addr);
 
         let mut buf = [0u8; 65535];
         loop {
