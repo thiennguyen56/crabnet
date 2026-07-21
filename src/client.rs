@@ -1,48 +1,62 @@
+use std::time::Duration;
+
 use super::config::{Config, ModeConfig};
-use std::{net::UdpSocket, time::Duration};
+use crate::config::TunConfig;
+use anyhow::Context;
+use std::net::SocketAddr;
+use tokio::{net::UdpSocket, time::timeout};
+
+pub struct ClientConfig {
+    pub bind_addr: SocketAddr,
+    pub server_addr: SocketAddr,
+    pub tun: TunConfig,
+}
 
 pub struct Client {
-    config: Config,
+    config: ClientConfig,
+    socket: UdpSocket,
 }
 
 impl Client {
-    pub fn new(conf: &Config) -> Self {
-        Self {
-            config: conf.clone(),
-        }
+    pub async fn bind(config: ClientConfig) -> anyhow::Result<Self> {
+        let socket = UdpSocket::bind(config.bind_addr).await?;
+        socket.connect(config.server_addr).await?;
+
+        log::info!(
+            "Client bound to {} and connected to {}",
+            config.bind_addr,
+            config.server_addr,
+        );
+
+        Ok(Self { config, socket })
     }
 
-    pub fn start(&self) -> std::io::Result<()> {
-        let ModeConfig::Client {
-            bind_addr,
-            server_addr,
-        } = &self.config.mode
-        else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "client requires client mode configuration",
-            ));
-        };
+    pub async fn run(&self) -> anyhow::Result<()> {
+        let payload = b"Hello, server!";
+        let sent =
+            self.socket.send(payload).await.with_context(|| {
+                format!("failed to send UDP packet to {}", self.config.server_addr)
+            })?;
 
-        let socket = UdpSocket::bind(bind_addr)?;
+        log::info!("Send {} bytes to {}", sent, self.config.server_addr,);
 
-        let _ = socket.set_read_timeout(Some(Duration::from_secs(3)));
+        let mut buffer = vec![0_u8; 65_535];
 
-        let message = "Hello, server!";
+        let received = timeout(Duration::from_secs(3), self.socket.recv(&mut buffer))
+            .await
+            .context("Time out waiting for server response")?
+            .context("failed to receive UDP response")?;
 
-        socket.send_to(message.as_bytes(), server_addr)?;
-        log::info!("Sent message to {}: {}", server_addr, message);
+        let response = &buffer[..received];
 
-        let mut buf = [0u8; 65535];
-        match socket.recv_from(&mut buf) {
-            Ok((n, from)) => {
-                let reply = std::str::from_utf8(&buf[..n]).unwrap_or("<invalid>");
-                log::info!("Receiving response from backend {}:{}", from, reply);
-            }
-            Err(e) => {
-                log::error!("Receiving error: {}", e);
-            }
-        }
+        log::info!(
+            "Received {} bytes from {}",
+            received,
+            self.config.server_addr,
+        );
+
+        log::debug!("Response payload: {:?}", String::from_utf8_lossy(response),);
+
         Ok(())
     }
 }

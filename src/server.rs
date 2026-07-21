@@ -1,38 +1,78 @@
-use super::config::{Config, ModeConfig};
-use std::net::UdpSocket;
+use crate::config::TunConfig;
+
+use anyhow::{Context, Ok};
+use std::net::SocketAddr;
+use tokio::net::UdpSocket;
+
+pub struct ServerConfig {
+    pub bind_addr: SocketAddr,
+    pub tun: TunConfig,
+}
 
 pub struct Server {
-    config: Config,
+    config: ServerConfig,
+    socket: UdpSocket,
 }
 
 impl Server {
-    pub fn new(conf: &Config) -> Self {
-        Self {
-            config: conf.clone(),
-        }
+    pub async fn bind(config: ServerConfig) -> anyhow::Result<Self> {
+        let socket = UdpSocket::bind(config.bind_addr).await?;
+
+        log::info!("Server bound to {}", config.bind_addr);
+
+        Ok(Self { config, socket })
     }
 
-    pub fn start(&self) -> std::io::Result<()> {
-        let ModeConfig::Server { bind_addr } = &self.config.mode else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "server requires server mode configuration",
-            ));
-        };
+    pub async fn run(&self) -> anyhow::Result<()> {
+        log::info!("UDP server listening on {}", self.config.bind_addr);
+        let mut buffer = [0u8; 65535];
 
-        let socket = UdpSocket::bind(bind_addr)?;
+        let shutdown = tokio::signal::ctrl_c();
+        tokio::pin!(shutdown);
 
-        log::info!("Server started on {}", bind_addr);
-
-        let mut buf = [0u8; 65535];
         loop {
-            let (amt, src) = socket.recv_from(&mut buf)?;
+            tokio::select! {
+                receive_result = self.socket.recv_from(&mut buffer) => {
+                    let (received, peer) = receive_result
+                        .context("failed to receive UDP packet")?;
 
-            let message = std::str::from_utf8(&buf[..amt]).unwrap_or("<invalid utf-8>");
-            log::info!("Received {} bytes from {}: {}", amt, src, message);
+                    let payload = &buffer[..received];
 
-            let response = format!("Echo: {}", message);
-            socket.send_to(response.as_bytes(), &src)?;
+                    log::info!(
+                        "Received {} bytes from {}",
+                        received,
+                        peer,
+                    );
+
+                    log::debug!(
+                        "Request payload: {:?}",
+                        String::from_utf8_lossy(payload),
+                    );
+
+                    // Echo the exact bytes without converting them to UTF-8.
+                    let sent = self.socket
+                        .send_to(payload, peer)
+                        .await
+                        .with_context(|| {
+                            format!("failed to send UDP response to {peer}")
+                        })?;
+
+                    log::info!(
+                        "Sent {} bytes to {}",
+                        sent,
+                        peer,
+                    );
+                }
+
+                shutdown_result = &mut shutdown => {
+                    shutdown_result
+                        .context("failed to listen for Ctrl+C")?;
+
+                    log::info!("Shutdown signal received");
+                    break;
+                }
+            }
         }
+        Ok(())
     }
 }

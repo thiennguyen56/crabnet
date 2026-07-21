@@ -59,6 +59,12 @@ pub struct Args {
     #[arg(long, help = "TUN interface address [default: 10.0.0.1]")]
     tun_address: Option<IpAddr>,
 
+    #[arg(long, help = "TUN interface prefix len [default: 24")]
+    tun_prefix_len: Option<u8>,
+
+    #[arg(long, help = "TUN interface mut [default: 1400]")]
+    tun_mut: Option<u16>,
+
     #[arg(long)]
     config_path: Option<PathBuf>,
 }
@@ -86,6 +92,8 @@ pub enum ModeConfig {
 pub struct TunConfig {
     pub name: String,
     pub address: IpAddr,
+    pub prefix_len: u8,
+    pub mtu: u16,
 }
 
 impl Default for Config {
@@ -98,6 +106,8 @@ impl Default for Config {
             tun: TunConfig {
                 name: "crabnet0".to_string(),
                 address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                prefix_len: 24,
+                mtu: 1400,
             },
             log_level: LogLevel::Info,
         }
@@ -120,6 +130,8 @@ impl Config {
         config.log_level = args.log_level.unwrap_or(config.log_level);
         config.tun.name = args.tun.clone().unwrap_or(config.tun.name);
         config.tun.address = args.tun_address.unwrap_or(config.tun.address);
+        config.tun.prefix_len = args.tun_prefix_len.unwrap_or(config.tun.prefix_len);
+        config.tun.mtu = args.tun_mut.unwrap_or(config.tun.mtu);
 
         let default = Self::default();
         let selected_mode = args.mode.unwrap_or_else(|| config.mode.kind());
