@@ -48,15 +48,21 @@ impl Client {
 
         loop {
             tokio::select! {
+                // Receive a request from tunnel device (comming from OS) then send it to server
                 result = self.tun.recv(&mut tun_buffer) => {
                     let size = result?;
 
-                     if size > mtu {
+                    if size > mtu {
                       log::warn!(
                           "Dropping oversized TUN packet: {size} bytes, MTU is {mtu}"
                       );
                       continue;
                   }
+
+                    log::debug!(
+                        "Client TUN -> UDP: sending {size} bytes to {}",
+                        self.config.server_addr,
+                    );
 
                     let sent = self.socket.send(&tun_buffer[..size]).await?;
 
@@ -68,6 +74,7 @@ impl Client {
 
                 }
 
+                // Receive a request from a server and then send it back to OS
                 result = self.socket.recv(&mut udp_buffer) => {
                     let size = result?;
 
@@ -79,6 +86,11 @@ impl Client {
                       );
                       continue;
                   }
+
+                    log::debug!(
+                        "Client UDP -> TUN: writing {size} bytes from {}",
+                        self.config.server_addr,
+                    );
 
                     self.tun.send(&udp_buffer[..size]).await?;
                 }

@@ -52,13 +52,20 @@ impl Server {
                     }
 
                     match active_peer {
-                        None => active_peer = Some(peer),
+                        None => {
+                            log::info!("Registered active peer {peer}");
+                            active_peer = Some(peer);
+                        }
                         Some(expected) if expected != peer => {
                             log::warn!("Ignoring unexpected peer {peer}");
                             continue;
                         }
                         _ => {}
                     }
+
+                    log::debug!(
+                        "Server UDP -> TUN: writing {size} bytes from {peer}"
+                    );
 
                     self.tun.send(&udp_buffer[..size]).await?;
                 }
@@ -74,6 +81,10 @@ impl Server {
                     }
 
                     if let Some(peer) = active_peer {
+                        log::debug!(
+                            "Server TUN -> UDP: sending {size} bytes to {peer}"
+                        );
+
                         let sent = self.socket
                             .send_to(&tun_buffer[..size], peer)
                             .await?;

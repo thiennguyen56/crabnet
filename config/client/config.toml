@@ -2,11 +2,11 @@ log_level = "debug"
 
 [mode]
 type = "client"
-bind_addr = "0.0.0.0:51820"
-server_addr = "127.0.0.1:51821"
+bind_addr = "192.0.2.1:51820"
+server_addr = "192.0.2.2:51821"
 
 [tun]
-name = "crabnet0-client"
+name = "crabnet0"
 address = "10.0.0.2"
-prefix_len = 18
+prefix_len = 24
 mtu = 1400
