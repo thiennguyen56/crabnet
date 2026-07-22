@@ -1,3 +1,4 @@
+use crate::tun::TunConfig;
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::fs;
@@ -62,8 +63,8 @@ pub struct Args {
     #[arg(long, help = "TUN interface prefix len [default: 24")]
     tun_prefix_len: Option<u8>,
 
-    #[arg(long, help = "TUN interface mut [default: 1400]")]
-    tun_mut: Option<u16>,
+    #[arg(long, help = "TUN interface mtu [default: 1400]")]
+    tun_mtu: Option<u16>,
 
     #[arg(long)]
     config_path: Option<PathBuf>,
@@ -86,14 +87,6 @@ pub enum ModeConfig {
     Server {
         bind_addr: SocketAddr,
     },
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct TunConfig {
-    pub name: String,
-    pub address: IpAddr,
-    pub prefix_len: u8,
-    pub mtu: u16,
 }
 
 impl Default for Config {
@@ -131,7 +124,7 @@ impl Config {
         config.tun.name = args.tun.clone().unwrap_or(config.tun.name);
         config.tun.address = args.tun_address.unwrap_or(config.tun.address);
         config.tun.prefix_len = args.tun_prefix_len.unwrap_or(config.tun.prefix_len);
-        config.tun.mtu = args.tun_mut.unwrap_or(config.tun.mtu);
+        config.tun.mtu = args.tun_mtu.unwrap_or(config.tun.mtu);
 
         let default = Self::default();
         let selected_mode = args.mode.unwrap_or_else(|| config.mode.kind());

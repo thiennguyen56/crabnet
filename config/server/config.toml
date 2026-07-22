@@ -5,7 +5,7 @@ type = "server"
 bind_addr = "127.0.0.1:51821"
 
 [tun]
-name = "crabnet0"
+name = "crabnet0-server"
 address = "10.0.0.1"
 prefix_len = 18
 mtu = 1400
