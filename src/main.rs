@@ -16,17 +16,17 @@ use crate::application::Application;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-    let config = Config::from_args(&args)?;
-    config.validate()?;
+	let args = Args::parse();
+	let config = Config::from_args(&args)?;
+	config.validate()?;
 
-    env_logger::Builder::new()
-        .filter_level(config.log_level.to_level_filter())
-        .init();
+	env_logger::Builder::new()
+		.filter_level(config.log_level.to_level_filter())
+		.init();
 
-    log::info!("CrabNet starting");
-    log::debug!("Config: {:?}", config);
+	log::info!("CrabNet starting");
+	log::debug!("Config: {:?}", config);
 
-    let application = Application::bind(config).await?;
-    application.run().await
+	let application = Application::bind(config).await?;
+	application.run().await
 }
