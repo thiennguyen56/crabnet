@@ -1,5 +1,5 @@
 use crate::{tun::TunConfig, tun::TunDevice};
-use anyhow::{Context, Ok};
+use anyhow::Ok;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 

@@ -18,6 +18,7 @@ use crate::application::Application;
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = Config::from_args(&args)?;
+    config.validate()?;
 
     env_logger::Builder::new()
         .filter_level(config.log_level.to_level_filter())

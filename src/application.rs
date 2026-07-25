@@ -26,27 +26,14 @@ impl Application {
                 let config = ClientConfig {
                     bind_addr,
                     server_addr,
-                    tun: TunConfig {
-                        name: tun.name,
-                        address: tun.address,
-                        prefix_len: tun.prefix_len,
-                        mtu: tun.mtu,
-                    },
+                    tun,
                 };
                 let client = Client::bind(config).await?;
                 Ok(Self::Client(client))
             }
 
             ModeConfig::Server { bind_addr } => {
-                let config = ServerConfig {
-                    bind_addr,
-                    tun: TunConfig {
-                        name: tun.name,
-                        address: tun.address,
-                        prefix_len: tun.prefix_len,
-                        mtu: tun.mtu,
-                    },
-                };
+                let config = ServerConfig { bind_addr, tun };
                 let server = Server::bind(config).await?;
                 Ok(Self::Server(server))
             }

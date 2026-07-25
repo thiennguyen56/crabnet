@@ -1,6 +1,5 @@
 use std::net::IpAddr;
 
-// use anyhow::Ok;
 use serde::Deserialize;
 use tokio::io;
 use tun_rs::DeviceBuilder;
@@ -13,10 +12,33 @@ pub struct TunConfig {
     pub mtu: u16,
 }
 
+impl TunConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.name.is_empty() {
+            anyhow::bail!("TUN interface name cannot be empty")
+        }
+        match self.address {
+            IpAddr::V4(_) if self.prefix_len > 32 => {
+                anyhow::bail!("IPv4 prefix must be between 0 and 32")
+            }
+            IpAddr::V6(_) if self.prefix_len > 128 => {
+                anyhow::bail!("IPv6 prefix must be between 0 and 128")
+            }
+            _ => {}
+        }
+        if self.address.is_ipv6() && self.mtu < 1280 {
+            anyhow::bail!("IPv6 TUN MTU must be at least 1280")
+        }
+        if self.mtu == 0 {
+            anyhow::bail!("TUN MTU cannot be zero")
+        }
+        Ok(())
+    }
+}
+
 pub struct TunDevice {
     inner: tun_rs::AsyncDevice,
     mtu: usize,
-    config: TunConfig,
 }
 
 impl TunDevice {
@@ -33,7 +55,6 @@ impl TunDevice {
         Ok(Self {
             inner,
             mtu: config.mtu as usize,
-            config: (*config).clone(),
         })
     }
 

@@ -1,10 +1,6 @@
-use std::time::Duration;
-
-use super::config::{Config, ModeConfig};
 use crate::{tun::TunConfig, tun::TunDevice};
-use anyhow::Context;
 use std::net::SocketAddr;
-use tokio::{net::UdpSocket, time::timeout};
+use tokio::net::UdpSocket;
 
 pub struct ClientConfig {
     pub bind_addr: SocketAddr,

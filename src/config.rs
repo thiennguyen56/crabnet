@@ -158,6 +158,11 @@ impl Config {
 
         Ok(config)
     }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.tun.validate()?;
+        Ok(())
+    }
 }
 
 impl ModeConfig {
@@ -200,6 +205,8 @@ mod tests {
                 [tun]
                 name = "crabnet0"
                 address = "10.0.0.2"
+                prefix_len = 14
+                mtu = 1400
             "#,
         )
         .unwrap();
@@ -208,6 +215,8 @@ mod tests {
         assert_eq!(config.mode.bind_addr(), "0.0.0.0:51820".parse().unwrap());
         assert_eq!(config.tun.address, "10.0.0.2".parse::<IpAddr>().unwrap());
         assert_eq!(config.log_level, LogLevel::Debug);
+        assert_eq!(config.tun.prefix_len, 14);
+        assert_eq!(config.tun.mtu, 1400);
     }
 
     #[test]
