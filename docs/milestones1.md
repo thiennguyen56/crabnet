@@ -60,36 +60,37 @@ Everything in Stage 2 exists to make this pipeline work.
 
 ---
 
-# Milestone 1 — UDP Transport
+# Milestone 1 — Stabilize the current tunnel
 
-### Goal
+## Goal
 
-Learn raw UDP communication.
+Finish and prove the existing single-client TUN-over-UDP vertical slice before
+adding protocol, cryptography, routing, or multi-client support.
 
-Features:
+## Work
 
-- UDP server
-- UDP client
-- Send bytes
-- Receive bytes
-- Logging
+- Keep a single canonical `TunConfig`.
+- Validate the TUN prefix length and MTU.
+- Create async client and server UDP sockets with contextual errors.
+- Forward binary IP packets unchanged in both directions.
+- Detect and drop oversized packets without stopping the process.
+- Keep the server explicitly limited to its first valid UDP peer.
+- Reject unexpected peers without replacing the active peer.
+- Exit cleanly on Ctrl+C and log forwarding/drop summaries.
+- Cover packet decisions and counters with unprivileged unit tests.
+- Prove ping and HTTP using isolated Linux network namespaces.
 
-Demo:
+## Acceptance
 
-```
-Hello
-↓
+- The client can ping `10.0.0.1` through the tunnel.
+- The client can access HTTP on `10.0.0.1` through the tunnel.
+- Arbitrary binary packets remain unchanged.
+- Oversized packets are dropped without crashing either endpoint.
+- Ctrl+C returns success and prints client/server summaries.
+- `cargo fmt --check`, tests, and Clippy all pass.
 
-UDP
-
-↓
-
-Hello
-```
-
-No packet parsing.
-
-No protocol.
+The manual and automated namespace procedures are documented in the project
+README. Full internet tunneling is deliberately outside this milestone.
 
 ---
 

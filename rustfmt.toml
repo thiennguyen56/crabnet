@@ -1,1 +1,8 @@
-hard_tabs = true
+# Keep indentation consistent with the existing codebase.
+hard_tabs = false
+tab_spaces = 2
+
+# Make rust-analyzer and `cargo fmt` use explicit project-wide defaults.
+edition = "2021"
+max_width = 100
+reorder_imports = true

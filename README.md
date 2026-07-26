@@ -329,3 +329,20 @@ Do not test full internet access yet. Reaching a site such as `google.com`
 also requires a client default route, an exclusion route for the Crabnet server
 endpoint, server IP forwarding, firewall forwarding, NAT, DNS handling, and a
 working return path.
+
+## Repeat the complete test automatically
+
+After the manual procedure works, run the isolated test with explicit root
+privileges:
+
+```bash
+cargo build
+sudo scripts/test-local-tunnel.sh
+```
+
+Build as your normal user so `sudo` does not create root-owned Cargo artifacts.
+The script refuses to reuse existing `cn-client` or `cn-server` namespaces,
+verifies the underlay, overlay, and HTTP path, checks the graceful-shutdown
+summaries, and removes only resources it created. It does not change the host
+default route or firewall. Logs and the HTTP response are retained in the
+temporary directory printed at exit.
