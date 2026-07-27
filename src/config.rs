@@ -1,4 +1,5 @@
-use crate::tun::TunConfig;
+use crate::{routing::RoutingConfig, tun::TunConfig};
+use anyhow::{bail, ensure};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::fs;
@@ -74,6 +75,8 @@ pub struct Args {
 pub struct Config {
   pub mode: ModeConfig,
   pub tun: TunConfig,
+  #[serde(default)]
+  pub routing: RoutingConfig,
   pub log_level: LogLevel,
 }
 
@@ -102,6 +105,7 @@ impl Default for Config {
         prefix_len: 24,
         mtu: 1400,
       },
+      routing: RoutingConfig::default(),
       log_level: LogLevel::Info,
     }
   }
@@ -161,6 +165,53 @@ impl Config {
 
   pub fn validate(&self) -> anyhow::Result<()> {
     self.tun.validate()?;
+
+    ensure!(
+      !self.routing.enable_nat || self.routing.enable_forwarding,
+      "routing.enable_nat requires routing.enable_forwarding"
+    );
+
+    for (index, route) in self.routing.protected_routes.iter().enumerate() {
+      ensure!(
+        route.prefix_len() != 0,
+        "routing.protected_routes[{index}] is a default route; full tunneling is not supported yet"
+      );
+      ensure!(
+        route.addr().is_ipv4() == self.tun.address.is_ipv4(),
+        "routing.protected_routes[{index}] address family must match the TUN address"
+      );
+
+      if self.routing.protected_routes[..index].contains(route) {
+        bail!("routing.protected_routes contains duplicate route {route}");
+      }
+    }
+
+    match &self.mode {
+      ModeConfig::Client { server_addr, .. } => {
+        ensure!(
+          !self.routing.enable_forwarding && !self.routing.enable_nat,
+          "routing.enable_forwarding and routing.enable_nat are server-only options"
+        );
+
+        if let Some(route) = self
+          .routing
+          .protected_routes
+          .iter()
+          .find(|route| route.contains(&server_addr.ip()))
+        {
+          bail!(
+            "VPN server address {server_addr} is inside protected route {route}; this would recursively route tunnel traffic"
+          );
+        }
+      }
+      ModeConfig::Server { .. } => {
+        ensure!(
+          self.routing.protected_routes.is_empty(),
+          "routing.protected_routes is a client-only option"
+        );
+      }
+    }
+
     Ok(())
   }
 }
@@ -207,6 +258,9 @@ mod tests {
                 address = "10.0.0.2"
                 prefix_len = 14
                 mtu = 1400
+
+                [routing]
+                protected_routes = ["172.16.0.0/24"]
             "#,
     )
     .unwrap();
@@ -217,6 +271,12 @@ mod tests {
     assert_eq!(config.log_level, LogLevel::Debug);
     assert_eq!(config.tun.prefix_len, 14);
     assert_eq!(config.tun.mtu, 1400);
+    assert_eq!(
+      config.routing.protected_routes,
+      vec!["172.16.0.0/24".parse().unwrap()]
+    );
+    assert!(!config.routing.enable_forwarding);
+    assert!(!config.routing.enable_nat);
   }
 
   #[test]
@@ -241,5 +301,81 @@ mod tests {
         bind_addr: "127.0.0.1:9001".parse().unwrap()
       }
     );
+  }
+
+  #[test]
+  fn routing_defaults_preserve_existing_config_files() {
+    let config: Config = toml::from_str(
+      r#"
+        log_level = "info"
+
+        [mode]
+        type = "client"
+        bind_addr = "0.0.0.0:51820"
+        server_addr = "192.0.2.2:51821"
+
+        [tun]
+        name = "crabnet0"
+        address = "10.0.0.2"
+        prefix_len = 24
+        mtu = 1400
+      "#,
+    )
+    .unwrap();
+
+    assert_eq!(config.routing, RoutingConfig::default());
+    config.validate().unwrap();
+  }
+
+  #[test]
+  fn rejects_route_containing_vpn_server() {
+    let mut config = Config::default();
+    config.routing.protected_routes = vec!["127.0.0.0/8".parse().unwrap()];
+
+    let error = config.validate().unwrap_err();
+    assert!(error
+      .to_string()
+      .contains("recursively route tunnel traffic"));
+  }
+
+  #[test]
+  fn rejects_full_tunnel_route_for_now() {
+    let mut config = Config::default();
+    config.routing.protected_routes = vec!["0.0.0.0/0".parse().unwrap()];
+
+    let error = config.validate().unwrap_err();
+    assert!(error
+      .to_string()
+      .contains("full tunneling is not supported"));
+  }
+
+  #[test]
+  fn rejects_nat_without_forwarding() {
+    let mut config = Config {
+      mode: ModeConfig::Server {
+        bind_addr: "0.0.0.0:51821".parse().unwrap(),
+      },
+      ..Config::default()
+    };
+    config.routing.enable_nat = true;
+
+    let error = config.validate().unwrap_err();
+    assert!(error
+      .to_string()
+      .contains("requires routing.enable_forwarding"));
+  }
+
+  #[test]
+  fn rejects_server_protected_routes() {
+    let mut config = Config {
+      mode: ModeConfig::Server {
+        bind_addr: "0.0.0.0:51821".parse().unwrap(),
+      },
+      ..Config::default()
+    };
+    config.routing.protected_routes = vec!["172.16.0.0/24".parse().unwrap()];
+
+    let error = config.validate().unwrap_err();
+    assert!(error.to_string().contains("client-only"));
   }
 }

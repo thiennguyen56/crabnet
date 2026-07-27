@@ -1,6 +1,7 @@
 mod application;
 mod client;
 mod config;
+mod routing;
 mod server;
 mod tun;
 

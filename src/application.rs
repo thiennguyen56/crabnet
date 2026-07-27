@@ -1,5 +1,6 @@
 use crate::client::{Client, ClientConfig};
 use crate::config::{Config, ModeConfig};
+use crate::routing::RoutingConfig;
 use crate::server::{Server, ServerConfig};
 
 pub enum Application {
@@ -9,10 +10,17 @@ pub enum Application {
 
 impl Application {
   pub async fn bind(config: Config) -> anyhow::Result<Self> {
+    if config.routing != RoutingConfig::default() {
+      log::warn!(
+        "Routing configuration is validated but not applied yet; automatic route, forwarding, and NAT setup will be added in the next Milestone 2 step"
+      );
+    }
+
     let Config {
       mode,
       tun,
       log_level: _,
+      routing: _,
     } = config;
 
     match mode {
