@@ -51,9 +51,10 @@ single server. It intentionally tests only the directly connected VPN subnet;
 full internet tunneling also requires forwarding, NAT, DNS, and additional
 route management.
 
-This procedure requires Linux, `sudo`, and the `iproute2` tools. TUN
-interfaces and network namespaces require root privileges or
-`CAP_NET_ADMIN`.
+This procedure requires Linux, `sudo`, and the `iproute2` tools. Crabnet uses
+the `ip` executable from `iproute2` to inspect, install, and remove client
+split-tunnel routes. TUN interfaces, network namespaces, and route changes
+require root privileges or `CAP_NET_ADMIN`.
 
 ## Test topology
 
@@ -107,7 +108,24 @@ name = "crabnet0"
 address = "10.0.0.2"
 prefix_len = 24
 mtu = 1400
+
+[routing]
+protected_routes = ["172.16.0.0/24"]
 ```
+
+`protected_routes` contains networks that the client should send into the
+tunnel. During startup, Crabnet runs the equivalent of:
+
+```bash
+ip -j route show exact 172.16.0.0/24
+ip route add 172.16.0.0/24 dev crabnet0
+```
+
+Crabnet preserves an identical pre-existing route, rejects a conflicting
+route, and records only routes that it creates so they can be removed during
+shutdown. The `172.16.0.0/24` route is used in this two-namespace test to prove
+automatic route installation and cleanup; reaching a real network behind the
+server is tested in the later three-namespace forwarding milestone.
 
 `config/server/config.toml` should use:
 
@@ -123,7 +141,15 @@ name = "crabnet0"
 address = "10.0.0.1"
 prefix_len = 24
 mtu = 1400
+
+[routing]
+enable_forwarding = true
+enable_nat = false
 ```
+
+Server forwarding and NAT settings are validated but are not applied yet. The
+server logs a warning when either setting is enabled. They are not needed for
+the directly connected `10.0.0.0/24` overlay test below.
 
 The same TUN name is safe here because each interface is created in a different
 network namespace.
@@ -222,6 +248,32 @@ sudo ip netns exec cn-server ip route add 10.0.0.0/24 dev crabnet0
 Only run these commands when the route is missing; adding an existing route
 returns a `File exists` error.
 
+Now verify the client split route that Crabnet manages through `iproute2`:
+
+```bash
+sudo ip netns exec cn-client \
+  ip route show exact 172.16.0.0/24
+```
+
+Expected output:
+
+```text
+172.16.0.0/24 dev crabnet0
+```
+
+Also confirm that the Crabnet UDP server endpoint still uses the underlay
+instead of recursively entering the tunnel:
+
+```bash
+sudo ip netns exec cn-client \
+  ip route get 192.0.2.2
+```
+
+The result must name `cn-client-veth`, not `crabnet0`. If it names the TUN,
+the protected routes include the server endpoint and Crabnet would tunnel its
+own UDP traffic recursively. Configuration validation normally rejects that
+case before creating the application.
+
 ## 7. Ping across the overlay
 
 From a third terminal:
@@ -311,9 +363,31 @@ Interpret the first missing observation:
 - Client UDP-to-TUN log but ping times out: check the client address, route, and
   packet integrity.
 
-## 10. Shut down and clean up
+## 10. Verify route cleanup and shut down
 
-Stop Crabnet and the HTTP server with Ctrl+C, then remove the dedicated test
+Press Ctrl+C in the client terminal first. Crabnet should log:
+
+```text
+Removed route 172.16.0.0/24 through crabnet0
+```
+
+After the client process exits, verify that its owned route is gone:
+
+```bash
+sudo ip netns exec cn-client \
+  ip route show exact 172.16.0.0/24
+```
+
+Expected output is empty. Crabnet performs route restoration after a clean
+Ctrl+C and after forwarding-loop I/O errors. It cannot guarantee cleanup after
+`SIGKILL`, a kernel crash, or power loss because the process gets no opportunity
+to run restoration code.
+
+If the route existed before Crabnet started and already pointed to `crabnet0`,
+Crabnet treats it as user-owned and does not remove it. If the route changes
+while Crabnet runs, Crabnet refuses to delete the changed route.
+
+Stop the server and HTTP server with Ctrl+C, then remove the dedicated test
 namespaces:
 
 ```bash
@@ -346,3 +420,6 @@ verifies the underlay, overlay, and HTTP path, checks the graceful-shutdown
 summaries, and removes only resources it created. It does not change the host
 default route or firewall. Logs and the HTTP response are retained in the
 temporary directory printed at exit.
+
+The manual `ip route show exact 172.16.0.0/24` checks above are the focused
+Milestone 2.3 proof for automatic split-route installation and restoration.
