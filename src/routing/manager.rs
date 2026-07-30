@@ -28,6 +28,7 @@ pub(crate) enum RouteOperation {
     destination: IpNet,
     interface: String,
   },
+  EnableIpv4Forwarding,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +42,9 @@ pub(crate) enum AppliedOperation {
   RouteAdded {
     destination: IpNet,
     interface: String,
+  },
+  Ipv4ForwardingEnabled {
+    previous: bool,
   },
 }
 
@@ -122,6 +126,14 @@ pub(crate) fn client_operations(config: &RoutingConfig, tun_name: &str) -> Vec<R
       interface: tun_name.to_owned(),
     })
     .collect()
+}
+
+pub(crate) fn server_operations(config: &RoutingConfig) -> Vec<RouteOperation> {
+  if config.enable_forwarding {
+    vec![RouteOperation::EnableIpv4Forwarding]
+  } else {
+    Vec::new()
+  }
 }
 
 #[cfg(test)]
@@ -386,5 +398,25 @@ mod tests {
       .await
       .unwrap_err();
     assert!(error.to_string().contains("already installed"));
+  }
+
+  #[test]
+  fn server_forwarding_enabled_produces_operation() {
+    let config = RoutingConfig {
+      enable_forwarding: true,
+      ..RoutingConfig::default()
+    };
+
+    assert_eq!(
+      server_operations(&config),
+      vec![RouteOperation::SetIpv4Forwarding { enabled: true },]
+    );
+  }
+
+  #[test]
+  fn server_forwarding_disabled_produces_no_operation() {
+    let config = RoutingConfig::default();
+
+    assert!(server_operations(&config).is_empty());
   }
 }

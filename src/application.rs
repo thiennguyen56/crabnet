@@ -2,17 +2,23 @@ use anyhow::Context;
 
 use crate::client::{Client, ClientConfig};
 use crate::config::{Config, ModeConfig};
-use crate::routing::{client_operations, LinuxRouteBackend, RouteManager, TokioCommandRunner};
+use crate::routing::{
+  client_operations, server_operations, LinuxRouteBackend, RouteManager, TokioCommandRunner,
+};
 use crate::server::{Server, ServerConfig};
 
 type ClientRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
+type ServerRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
 
 pub enum Application {
   Client {
     client: Client,
     routes: ClientRouteManager,
   },
-  Server(Server),
+  Server {
+    server: Server,
+    routing: ServerRouteManager,
+  },
 }
 
 impl Application {
@@ -59,7 +65,13 @@ impl Application {
       ModeConfig::Server { bind_addr } => {
         let config = ServerConfig { bind_addr, tun };
         let server = Server::bind(config).await?;
-        Ok(Self::Server(server))
+
+        let operations = server_operations(&routing);
+
+        let backend = LinuxRouteBackend::new(TokioCommandRunner);
+
+        let mut routing = RouteManager::new(backend);
+        Ok(Self::Server { server, routing })
       }
     }
   }
@@ -71,7 +83,7 @@ impl Application {
         let restore_result = routes.restore().await;
         combine_run_and_restore(run_result, restore_result)?
       }
-      Self::Server(server) => server.run().await?,
+      Self::Server { server, routing: _ } => server.run().await?,
     }
 
     Ok(())

@@ -69,6 +69,7 @@ where
         ExistingRoute::Missing => {
           run_checked(
             &mut self.runner,
+            "ip",
             &add_route_args(destination, interface),
             &format!("failed to add route {destination} through {interface}"),
           )
@@ -99,6 +100,7 @@ where
         ExistingRoute::Identical => {
           run_checked(
             &mut self.runner,
+            "ip",
             &delete_route_args(destination, interface),
             &format!("failed to remove route {destination} through {interface}"),
           )
@@ -164,6 +166,7 @@ where
 {
   let result = run_checked(
     runner,
+    "ip",
     &show_route_args(destination),
     &format!("failed to inspect route {destination}"),
   )
@@ -201,13 +204,14 @@ fn delete_route_args(destination: &IpNet, interface: &str) -> Vec<String> {
 
 async fn run_checked<R>(
   runner: &mut R,
+  program: &str,
   args: &[String],
   action: &str,
 ) -> anyhow::Result<CommandResult>
 where
   R: CommandRunner,
 {
-  let result = runner.run("ip", args).await?;
+  let result = runner.run(program, args).await?;
   if !result.success {
     let stderr = result.stderr.trim();
     anyhow::bail!(
