@@ -7,8 +7,9 @@ use crate::routing::{
 };
 use crate::server::{Server, ServerConfig};
 
-type ClientRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
-type ServerRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
+type LinuxRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
+type ClientRouteManager = LinuxRouteManager;
+type ServerRouteManager = LinuxRouteManager;
 
 pub enum Application {
   Client {
@@ -30,10 +31,8 @@ impl Application {
       routing,
     } = config;
 
-    if matches!(&mode, ModeConfig::Server { .. })
-      && (routing.enable_forwarding || routing.enable_nat)
-    {
-      log::warn!("Server forwarding and NAT configuration is validated but not applied yet");
+    if matches!(&mode, ModeConfig::Server { .. }) && routing.enable_nat {
+      log::warn!("Server NAT configuration is validated but not applied yet");
     }
 
     match mode {
@@ -71,6 +70,11 @@ impl Application {
         let backend = LinuxRouteBackend::new(TokioCommandRunner);
 
         let mut routing = RouteManager::new(backend);
+
+        routing
+          .install(&operations)
+          .await
+          .context("failed to configure server networking")?;
         Ok(Self::Server { server, routing })
       }
     }
@@ -80,32 +84,40 @@ impl Application {
     match self {
       Self::Client { client, mut routes } => {
         let run_result = client.run().await;
-        let restore_result = routes.restore().await;
-        combine_run_and_restore(run_result, restore_result)?
+        let cleanup_result = routes.restore().await;
+        combine_run_and_cleanup("client", run_result, cleanup_result)?
       }
-      Self::Server { server, routing: _ } => server.run().await?,
+      Self::Server {
+        server,
+        mut routing,
+      } => {
+        let run_result = server.run().await;
+        let cleanup_result = routing.restore().await;
+        combine_run_and_cleanup("server", run_result, cleanup_result)?;
+      }
     }
 
     Ok(())
   }
 }
 
-fn combine_run_and_restore(
+fn combine_run_and_cleanup(
+  component: &str,
   run_result: anyhow::Result<()>,
-  restore_result: anyhow::Result<()>,
+  cleanup_result: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-  match (run_result, restore_result) {
+  match (run_result, cleanup_result) {
     (Ok(()), Ok(())) => Ok(()),
 
     (Err(run_error), Ok(())) => Err(run_error),
 
-    (Ok(()), Err(restore_error)) => {
-      Err(restore_error.context("client stopped but route restoration failed"))
+    (Ok(()), Err(cleanup_error)) => {
+      Err(cleanup_error.context(format!("{component} stopped but network cleanup failed")))
     }
 
-    (Err(run_error), Err(restore_error)) => Err(run_error.context(format!(
-      "client also failed to restore routes: \
-         {restore_error:#}"
+    (Err(run_error), Err(cleanup_error)) => Err(run_error.context(format!(
+      "{component} also failed to clean up \
+         network state: {cleanup_error:#}"
     ))),
   }
 }
@@ -120,27 +132,27 @@ mod tests {
 
   #[test]
   fn run_and_restore_success_returns_success() {
-    combine_run_and_restore(Ok(()), Ok(())).unwrap();
+    combine_run_and_cleanup("client", Ok(()), Ok(())).unwrap();
   }
 
   #[test]
   fn run_failure_is_preserved_when_restore_succeeds() {
-    let error = combine_run_and_restore(failure("run failed"), Ok(())).unwrap_err();
+    let error = combine_run_and_cleanup("client", failure("run failed"), Ok(())).unwrap_err();
     assert!(format!("{error:#}").contains("run failed"));
   }
 
   #[test]
   fn restore_failure_is_returned_when_run_succeeds() {
-    let error = combine_run_and_restore(Ok(()), failure("restore failed")).unwrap_err();
+    let error = combine_run_and_cleanup("client", Ok(()), failure("restore failed")).unwrap_err();
     let message = format!("{error:#}");
-    assert!(message.contains("client stopped but route restoration failed"));
+    assert!(message.contains("client stopped but network cleanup failed"));
     assert!(message.contains("restore failed"));
   }
 
   #[test]
   fn run_and_restore_failures_are_both_preserved() {
-    let error =
-      combine_run_and_restore(failure("run failed"), failure("restore failed")).unwrap_err();
+    let error = combine_run_and_cleanup("client", failure("run failed"), failure("restore failed"))
+      .unwrap_err();
     let message = format!("{error:#}");
     assert!(message.contains("run failed"));
     assert!(message.contains("restore failed"));

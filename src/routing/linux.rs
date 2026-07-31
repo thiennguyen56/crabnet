@@ -5,6 +5,8 @@ use tokio::process::Command;
 
 use super::manager::{AppliedOperation, ApplyOutcome, RouteBackend, RouteOperation};
 
+const IPV4_FORWARDING_KEY: &str = "net.ipv4.ip_forward";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommandResult {
   success: bool,
@@ -28,7 +30,7 @@ impl CommandRunner for TokioCommandRunner {
       .kill_on_drop(true)
       .output()
       .await
-      .with_context(|| format!("failed to execute `{program}`; ensure iproute2 is installed"))?;
+      .with_context(|| format!("failed to execute `{program}`"))?;
 
     Ok(CommandResult {
       success: output.status.success(),
@@ -58,7 +60,35 @@ where
       RouteOperation::AddRoute {
         destination,
         interface,
-      } => match inspect_route(&mut self.runner, destination, interface).await? {
+      } => self.apply_route(destination, interface).await,
+      RouteOperation::SetIpv4Forwarding { enabled } => self.apply_ipv4_forwarding(*enabled).await,
+    }
+  }
+
+  async fn revert(&mut self, operation: &AppliedOperation) -> anyhow::Result<()> {
+    match operation {
+      AppliedOperation::RouteAdded {
+        destination,
+        interface,
+      } => self.revert_route(destination, interface).await,
+
+      AppliedOperation::Ipv4ForwardingChanged { previous } => {
+        self.revert_ipv4_forwarding(*previous).await
+      }
+    }
+  }
+}
+
+impl<R> LinuxRouteBackend<R>
+where
+  R: CommandRunner,
+{
+  async fn apply_route(
+    &mut self,
+    destination: &IpNet,
+    interface: &str,
+  ) -> anyhow::Result<ApplyOutcome> {
+    match inspect_route(&mut self.runner, destination, interface).await? {
         ExistingRoute::Identical => {
           log::debug!("Route {destination} through {interface} already exists");
           Ok(ApplyOutcome::Unchanged)
@@ -77,39 +107,73 @@ where
           log::info!("Installed route {destination} through {interface}");
           Ok(ApplyOutcome::Applied(AppliedOperation::RouteAdded {
             destination: *destination,
-            interface: interface.clone(),
+            interface: interface.to_string(),
           }))
         }
-      },
+      }
+  }
+
+  async fn apply_ipv4_forwarding(&mut self, requested: bool) -> anyhow::Result<ApplyOutcome> {
+    let current = read_ipv4_forwarding(&mut self.runner).await?;
+
+    if current == requested {
+      log::debug!(
+        "IPv4 forwarding is already {}",
+        if requested { "enabled" } else { "disabled" }
+      );
+
+      return Ok(ApplyOutcome::Unchanged);
+    }
+
+    write_ipv4_forwarding(&mut self.runner, requested).await?;
+
+    log::info!("Set IPv4 forwarding to {}", u8::from(requested));
+
+    Ok(ApplyOutcome::Applied(
+      AppliedOperation::Ipv4ForwardingChanged { previous: current },
+    ))
+  }
+
+  async fn revert_route(&mut self, destination: &IpNet, interface: &str) -> anyhow::Result<()> {
+    match inspect_route(&mut self.runner, destination, interface).await? {
+      ExistingRoute::Missing => {
+        log::warn!("Route {destination} through {interface} was already removed");
+        Ok(())
+      }
+      ExistingRoute::Conflicting => anyhow::bail!(
+        "refusing to remove route {destination}: routing state changed after Crabnet installed it"
+      ),
+      ExistingRoute::Identical => {
+        run_checked(
+          &mut self.runner,
+          "ip",
+          &delete_route_args(destination, interface),
+          &format!("failed to remove route {destination} through {interface}"),
+        )
+        .await?;
+        log::info!("Removed route {destination} through {interface}");
+        Ok(())
+      }
     }
   }
 
-  async fn revert(&mut self, operation: &AppliedOperation) -> anyhow::Result<()> {
-    match operation {
-      AppliedOperation::RouteAdded {
-        destination,
-        interface,
-      } => match inspect_route(&mut self.runner, destination, interface).await? {
-        ExistingRoute::Missing => {
-          log::warn!("Route {destination} through {interface} was already removed");
-          Ok(())
-        }
-        ExistingRoute::Conflicting => anyhow::bail!(
-          "refusing to remove route {destination}: routing state changed after Crabnet installed it"
-        ),
-        ExistingRoute::Identical => {
-          run_checked(
-            &mut self.runner,
-            "ip",
-            &delete_route_args(destination, interface),
-            &format!("failed to remove route {destination} through {interface}"),
-          )
-          .await?;
-          log::info!("Removed route {destination} through {interface}");
-          Ok(())
-        }
-      },
+  async fn revert_ipv4_forwarding(&mut self, previous: bool) -> anyhow::Result<()> {
+    let current = read_ipv4_forwarding(&mut self.runner).await?;
+
+    if current == previous {
+      log::debug!(
+        "IPv4 forwarding is already restored to {}",
+        u8::from(previous)
+      );
+
+      return Ok(());
     }
+
+    write_ipv4_forwarding(&mut self.runner, previous).await?;
+
+    log::info!("Restored IPv4 forwarding to {}", u8::from(previous));
+
+    Ok(())
   }
 }
 
@@ -200,6 +264,59 @@ fn add_route_args(destination: &IpNet, interface: &str) -> Vec<String> {
 
 fn delete_route_args(destination: &IpNet, interface: &str) -> Vec<String> {
   route_change_args("del", destination, interface)
+}
+
+fn read_ipv4_forwarding_args() -> Vec<String> {
+  vec!["-n".to_owned(), IPV4_FORWARDING_KEY.to_owned()]
+}
+
+fn write_ipv4_forwarding_args(enabled: bool) -> Vec<String> {
+  vec![
+    "-w".to_owned(),
+    format!("{IPV4_FORWARDING_KEY}={}", u8::from(enabled)),
+  ]
+}
+
+fn parse_ipv4_forwarding(stdout: &str) -> anyhow::Result<bool> {
+  match stdout.trim() {
+    "0" => Ok(false),
+    "1" => Ok(true),
+
+    value => anyhow::bail!(
+      "unexpected value for {IPV4_FORWARDING_KEY}: \
+      expected 0 or 1, received {value:?}"
+    ),
+  }
+}
+
+async fn read_ipv4_forwarding<R>(runner: &mut R) -> anyhow::Result<bool>
+where
+  R: CommandRunner,
+{
+  let result = run_checked(
+    runner,
+    "sysctl",
+    &read_ipv4_forwarding_args(),
+    "failed to read IPv4 forwarding state",
+  )
+  .await?;
+
+  parse_ipv4_forwarding(&result.stdout)
+}
+
+async fn write_ipv4_forwarding<R>(runner: &mut R, enabled: bool) -> anyhow::Result<()>
+where
+  R: CommandRunner,
+{
+  run_checked(
+    runner,
+    "sysctl",
+    &write_ipv4_forwarding_args(enabled),
+    &format!("failed to set IPv4 forwarding to {}", u8::from(enabled)),
+  )
+  .await?;
+
+  Ok(())
 }
 
 async fn run_checked<R>(
@@ -418,5 +535,132 @@ mod tests {
     assert!(
       format!("{:#}", backend.revert(&applied()).await.unwrap_err()).contains("delete failed")
     );
+  }
+
+  #[test]
+  fn parses_ipv4_forwarding_values() {
+    assert!(!parse_ipv4_forwarding("0\n").unwrap());
+    assert!(parse_ipv4_forwarding("1\n").unwrap());
+  }
+
+  #[test]
+  fn rejects_invalid_ipv4_forwarding_value() {
+    let error = parse_ipv4_forwarding("enabled\n").unwrap_err();
+
+    assert!(error.to_string().contains("expected 0 or 1"));
+  }
+
+  #[tokio::test]
+  async fn disabled_forwarding_is_enabled() {
+    let mut backend = backend(vec![success("0\n"), success("net.ipv4.ip_forward = 1\n")]);
+
+    let outcome = backend
+      .apply(&RouteOperation::SetIpv4Forwarding { enabled: true })
+      .await
+      .unwrap();
+
+    assert_eq!(
+      outcome,
+      ApplyOutcome::Applied(AppliedOperation::Ipv4ForwardingChanged { previous: false })
+    );
+    assert_eq!(backend.runner.calls[0].program, "sysctl");
+    assert_eq!(backend.runner.calls[0].args, ["-n", "net.ipv4.ip_forward"]);
+    assert_eq!(backend.runner.calls[1].program, "sysctl");
+    assert_eq!(
+      backend.runner.calls[1].args,
+      ["-w", "net.ipv4.ip_forward=1"]
+    );
+  }
+
+  #[tokio::test]
+  async fn enabled_forwarding_is_unchanged() {
+    let mut backend = backend(vec![success("1\n")]);
+
+    let outcome = backend
+      .apply(&RouteOperation::SetIpv4Forwarding { enabled: true })
+      .await
+      .unwrap();
+
+    assert_eq!(outcome, ApplyOutcome::Unchanged);
+    assert_eq!(backend.runner.calls.len(), 1);
+  }
+
+  #[tokio::test]
+  async fn invalid_forwarding_value_is_rejected() {
+    let mut backend = backend(vec![success("enabled\n")]);
+
+    let error = backend
+      .apply(&RouteOperation::SetIpv4Forwarding { enabled: true })
+      .await
+      .unwrap_err();
+
+    assert!(error.to_string().contains("expected 0 or 1"));
+  }
+
+  #[tokio::test]
+  async fn forwarding_read_and_write_failures_are_propagated() {
+    let mut read_failure = backend(vec![failure("read denied")]);
+    assert!(format!(
+      "{:#}",
+      read_failure
+        .apply(&RouteOperation::SetIpv4Forwarding { enabled: true })
+        .await
+        .unwrap_err()
+    )
+    .contains("read denied"));
+
+    let mut write_failure = backend(vec![success("0\n"), failure("write denied")]);
+    let message = format!(
+      "{:#}",
+      write_failure
+        .apply(&RouteOperation::SetIpv4Forwarding { enabled: true })
+        .await
+        .unwrap_err()
+    );
+    assert!(message.contains("failed to set IPv4 forwarding to 1"));
+    assert!(message.contains("write denied"));
+  }
+
+  #[tokio::test]
+  async fn forwarding_is_restored_to_previous_value() {
+    let mut backend = backend(vec![success("1\n"), success("net.ipv4.ip_forward = 0\n")]);
+
+    backend
+      .revert(&AppliedOperation::Ipv4ForwardingChanged { previous: false })
+      .await
+      .unwrap();
+
+    assert_eq!(backend.runner.calls[0].program, "sysctl");
+    assert_eq!(backend.runner.calls[1].program, "sysctl");
+    assert_eq!(
+      backend.runner.calls[1].args,
+      ["-w", "net.ipv4.ip_forward=0"]
+    );
+  }
+
+  #[tokio::test]
+  async fn forwarding_already_restored_needs_no_write() {
+    let mut backend = backend(vec![success("0\n")]);
+
+    backend
+      .revert(&AppliedOperation::Ipv4ForwardingChanged { previous: false })
+      .await
+      .unwrap();
+
+    assert_eq!(backend.runner.calls.len(), 1);
+  }
+
+  #[tokio::test]
+  async fn forwarding_restore_failure_is_propagated() {
+    let mut backend = backend(vec![success("1\n"), failure("restore denied")]);
+
+    let message = format!(
+      "{:#}",
+      backend
+        .revert(&AppliedOperation::Ipv4ForwardingChanged { previous: false })
+        .await
+        .unwrap_err()
+    );
+    assert!(message.contains("restore denied"));
   }
 }

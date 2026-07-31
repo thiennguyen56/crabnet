@@ -28,7 +28,9 @@ pub(crate) enum RouteOperation {
     destination: IpNet,
     interface: String,
   },
-  EnableIpv4Forwarding,
+  SetIpv4Forwarding {
+    enabled: bool,
+  },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +45,7 @@ pub(crate) enum AppliedOperation {
     destination: IpNet,
     interface: String,
   },
-  Ipv4ForwardingEnabled {
+  Ipv4ForwardingChanged {
     previous: bool,
   },
 }
@@ -130,7 +132,7 @@ pub(crate) fn client_operations(config: &RoutingConfig, tun_name: &str) -> Vec<R
 
 pub(crate) fn server_operations(config: &RoutingConfig) -> Vec<RouteOperation> {
   if config.enable_forwarding {
-    vec![RouteOperation::EnableIpv4Forwarding]
+    vec![RouteOperation::SetIpv4Forwarding { enabled: true }]
   } else {
     Vec::new()
   }
@@ -143,6 +145,7 @@ mod tests {
   #[derive(Debug, Default)]
   struct FakeRouteBackend {
     existing: Vec<AppliedOperation>,
+    ipv4_forwarding: bool,
     apply_calls: Vec<RouteOperation>,
     revert_calls: Vec<AppliedOperation>,
     fail_apply_at: Option<usize>,
@@ -157,33 +160,44 @@ mod tests {
         anyhow::bail!("injected apply failure at call {call_index}");
       }
 
-      let requested = match operation {
+      match operation {
         RouteOperation::AddRoute {
           destination,
           interface,
-        } => AppliedOperation::RouteAdded {
-          destination: *destination,
-          interface: interface.clone(),
-        },
-      };
-      let destination = match operation {
-        RouteOperation::AddRoute { destination, .. } => destination,
-      };
-      let existing = self.existing.iter().find(|existing| match existing {
-        AppliedOperation::RouteAdded {
-          destination: current,
-          ..
-        } => current == destination,
-      });
+        } => {
+          let requested = AppliedOperation::RouteAdded {
+            destination: *destination,
+            interface: interface.clone(),
+          };
+          let existing = self.existing.iter().find(|existing| match existing {
+            AppliedOperation::RouteAdded {
+              destination: current,
+              ..
+            } => current == destination,
+            AppliedOperation::Ipv4ForwardingChanged { .. } => false,
+          });
 
-      match existing {
-        Some(existing) if existing == &requested => Ok(ApplyOutcome::Unchanged),
-        Some(existing) => {
-          anyhow::bail!("route conflict: requested {requested:?}, but {existing:?} already exists")
+          match existing {
+            Some(existing) if existing == &requested => Ok(ApplyOutcome::Unchanged),
+            Some(existing) => anyhow::bail!(
+              "route conflict: requested {requested:?}, but {existing:?} already exists"
+            ),
+            None => {
+              self.existing.push(requested.clone());
+              Ok(ApplyOutcome::Applied(requested))
+            }
+          }
         }
-        None => {
-          self.existing.push(requested.clone());
-          Ok(ApplyOutcome::Applied(requested))
+        RouteOperation::SetIpv4Forwarding { enabled } => {
+          if self.ipv4_forwarding == *enabled {
+            Ok(ApplyOutcome::Unchanged)
+          } else {
+            let previous = self.ipv4_forwarding;
+            self.ipv4_forwarding = *enabled;
+            Ok(ApplyOutcome::Applied(
+              AppliedOperation::Ipv4ForwardingChanged { previous },
+            ))
+          }
         }
       }
     }
@@ -195,13 +209,21 @@ mod tests {
         anyhow::bail!("injected revert failure at call {call_index}");
       }
 
-      let position = self
-        .existing
-        .iter()
-        .position(|existing| existing == operation)
-        .ok_or_else(|| anyhow::anyhow!("cannot revert missing operation {operation:?}"))?;
-      self.existing.remove(position);
-      Ok(())
+      match operation {
+        AppliedOperation::RouteAdded { .. } => {
+          let position = self
+            .existing
+            .iter()
+            .position(|existing| existing == operation)
+            .ok_or_else(|| anyhow::anyhow!("cannot revert missing operation {operation:?}"))?;
+          self.existing.remove(position);
+          Ok(())
+        }
+        AppliedOperation::Ipv4ForwardingChanged { previous } => {
+          self.ipv4_forwarding = *previous;
+          Ok(())
+        }
+      }
     }
   }
 
@@ -418,5 +440,18 @@ mod tests {
     let config = RoutingConfig::default();
 
     assert!(server_operations(&config).is_empty());
+  }
+
+  #[tokio::test]
+  async fn manager_restores_forwarding_state() {
+    let mut manager = RouteManager::new(FakeRouteBackend::default());
+    manager
+      .install(&[RouteOperation::SetIpv4Forwarding { enabled: true }])
+      .await
+      .unwrap();
+    assert!(manager.backend().ipv4_forwarding);
+
+    manager.restore().await.unwrap();
+    assert!(!manager.backend().ipv4_forwarding);
   }
 }
