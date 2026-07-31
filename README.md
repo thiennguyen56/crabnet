@@ -87,9 +87,9 @@ sudo ip link add cn-client-veth type veth peer name cn-server-veth
 sudo ip link set cn-client-veth netns cn-client
 sudo ip link set cn-server-veth netns cn-server
 
-sudo ip link add cn-server-backend type veth peer name cn-backend-veth
-sudo ip link set cn-server-backend netns cn-server
-sudo ip link set cn-backend-veth netns cn-backend
+sudo ip link add cn-srv-back type veth peer name cn-back-veth
+sudo ip link set cn-srv-back netns cn-server
+sudo ip link set cn-back-veth netns cn-backend
 ```
 
 The first veth carries Crabnet's UDP underlay. The second veth connects the
@@ -104,19 +104,19 @@ sudo ip netns exec cn-server \
   ip address add 192.0.2.2/24 dev cn-server-veth
 
 sudo ip netns exec cn-server \
-  ip address add 172.16.0.1/24 dev cn-server-backend
+  ip address add 172.16.0.1/24 dev cn-srv-back
 sudo ip netns exec cn-backend \
-  ip address add 172.16.0.2/24 dev cn-backend-veth
+  ip address add 172.16.0.2/24 dev cn-back-veth
 
 sudo ip netns exec cn-client ip link set lo up
 sudo ip netns exec cn-client ip link set cn-client-veth up
 
 sudo ip netns exec cn-server ip link set lo up
 sudo ip netns exec cn-server ip link set cn-server-veth up
-sudo ip netns exec cn-server ip link set cn-server-backend up
+sudo ip netns exec cn-server ip link set cn-srv-back up
 
 sudo ip netns exec cn-backend ip link set lo up
-sudo ip netns exec cn-backend ip link set cn-backend-veth up
+sudo ip netns exec cn-backend ip link set cn-back-veth up
 ```
 
 The backend needs a return route for VPN client addresses:
@@ -321,6 +321,18 @@ sudo ip netns delete cn-backend
 
 Deleting the namespaces also removes their veth interfaces, TUN interfaces,
 addresses, and routes.
+
+If a previous run was interrupted and left test resources behind, use the
+targeted cleanup helper before starting again:
+
+```bash
+sudo scripts/clean-local-tunnel.sh
+```
+
+It removes only the Crabnet test namespaces and exact test veth names. Deleting
+`cn-server` also removes its namespace-local `net.ipv4.ip_forward` state. The
+helper does not change host routes, the host forwarding setting, or the host
+firewall.
 
 ## Repeat the two-endpoint test automatically
 
