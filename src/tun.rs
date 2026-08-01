@@ -1,18 +1,29 @@
+//! TUN configuration, construction, and packet I/O.
+//!
+//! Reads receive packets from the local kernel; writes inject packets into it.
+
 use std::net::IpAddr;
 
 use serde::Deserialize;
 use tokio::io;
 use tun_rs::DeviceBuilder;
 
+/// Configuration required to create one TUN interface.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TunConfig {
+  /// Interface name requested from the operating system.
   pub name: String,
+  /// IPv4 or IPv6 address assigned to the interface.
   pub address: IpAddr,
+  /// Network prefix length matching the address family.
   pub prefix_len: u8,
+  /// Maximum packet size accepted by the tunnel.
   pub mtu: u16,
 }
 
 impl TunConfig {
+  /// Validates the interface name, prefix length, and MTU without creating a
+  /// privileged device.
   pub fn validate(&self) -> anyhow::Result<()> {
     if self.name.is_empty() {
       anyhow::bail!("TUN interface name cannot be empty")
@@ -36,11 +47,13 @@ impl TunConfig {
   }
 }
 
+/// Async TUN device with the configured MTU retained for write validation.
 pub struct TunDevice {
   inner: tun_rs::AsyncDevice,
   mtu: usize,
 }
 
+/// Rejects packets larger than the configured TUN MTU.
 fn validate_packet_size(size: usize, mtu: usize) -> io::Result<()> {
   if size > mtu {
     return Err(io::Error::new(
@@ -53,6 +66,9 @@ fn validate_packet_size(size: usize, mtu: usize) -> io::Result<()> {
 }
 
 impl TunDevice {
+  /// Builds and configures an asynchronous operating-system TUN device.
+  ///
+  /// This operation generally requires root or CAP_NET_ADMIN on Linux.
   pub fn create(config: &TunConfig) -> anyhow::Result<Self> {
     let mut builder = DeviceBuilder::new().name(&config.name).mtu(config.mtu);
 
@@ -69,12 +85,17 @@ impl TunDevice {
     })
   }
 
-  // read_packet means local OS -> Crabnet
+  /// Reads one raw IP packet from the local operating system into buffer.
+  ///
+  /// The direction is local OS to Crabnet.
   pub async fn read_packet(&self, buffer: &mut [u8]) -> io::Result<usize> {
     self.inner.recv(buffer).await
   }
 
-  // write_packet means Crabnet -> local OS
+  /// Writes one complete raw IP packet into the local operating system.
+  ///
+  /// Oversized and partial writes are rejected so callers cannot treat
+  /// truncated packets as successful.
   pub async fn write_packet(&self, packet: &[u8]) -> io::Result<()> {
     validate_packet_size(packet.len(), self.mtu)?;
 
@@ -93,6 +114,7 @@ impl TunDevice {
     Ok(())
   }
 
+  /// Returns the configured MTU as a buffer-friendly usize.
   pub fn mtu(&self) -> usize {
     self.mtu
   }

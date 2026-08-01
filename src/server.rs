@@ -1,18 +1,28 @@
+//! Single-peer Crabnet server and bidirectional packet forwarding.
+//!
+//! The first valid UDP datagram registers the only active peer. Later traffic
+//! from other addresses is rejected without replacing that peer.
+
 use crate::{tun::TunConfig, tun::TunDevice};
 use anyhow::Context;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
+/// Resources and address required to bind a server endpoint.
 pub struct ServerConfig {
+  /// Local address on which the server receives UDP datagrams.
   pub bind_addr: SocketAddr,
+  /// Server TUN interface configuration.
   pub tun: TunConfig,
 }
 
+/// Tracks the first valid UDP peer for this process lifetime.
 #[derive(Debug, Default)]
 struct SinglePeer {
   address: Option<SocketAddr>,
 }
 
+/// Result of observing a UDP source address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PeerDecision {
   Registered,
@@ -21,6 +31,8 @@ enum PeerDecision {
 }
 
 impl SinglePeer {
+  /// Registers the first candidate, accepts that peer again, and rejects every
+  /// different address.
   fn observe(&mut self, candidate: SocketAddr) -> PeerDecision {
     match self.address {
       None => {
@@ -34,11 +46,13 @@ impl SinglePeer {
     }
   }
 
+  /// Returns the registered peer, if a valid datagram has selected one.
   fn address(&self) -> Option<SocketAddr> {
     self.address
   }
 }
 
+/// Saturating counters for forwarded and deliberately dropped server traffic.
 #[derive(Debug, Default)]
 struct ServerStats {
   udp_to_tun_packets: u64,
@@ -55,6 +69,7 @@ struct ServerStats {
 }
 
 impl ServerStats {
+  /// Emits the final server forwarding and drop counters.
   fn log_summary(&self) {
     log::info!(
       "Server forwarding summary: \
@@ -78,6 +93,7 @@ impl ServerStats {
   }
 }
 
+/// Action selected for an inbound UDP datagram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UdpPacketDecision {
   ForwardToTun { newly_registered: bool },
@@ -86,6 +102,7 @@ enum UdpPacketDecision {
   DropUnexpectedPeer,
 }
 
+/// Action selected for a packet read from the server TUN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TunPacketDecision {
   SendToPeer(SocketAddr),
@@ -93,6 +110,7 @@ enum TunPacketDecision {
   DropNoPeer,
 }
 
+/// Mutable, unit-testable peer policy, MTU policy, and forwarding counters.
 struct ServerState {
   mtu: usize,
   peer: SinglePeer,
@@ -100,6 +118,7 @@ struct ServerState {
 }
 
 impl ServerState {
+  /// Creates server forwarding state with no registered peer.
   fn new(mtu: usize) -> Self {
     Self {
       mtu,
@@ -108,6 +127,9 @@ impl ServerState {
     }
   }
 
+  /// Validates an inbound datagram before peer registration or TUN injection.
+  ///
+  /// Empty and oversized datagrams cannot register a peer.
   fn classify_udp(&mut self, size: usize, peer: SocketAddr) -> UdpPacketDecision {
     if size == 0 {
       self.stats.dropped_empty_udp = self.stats.dropped_empty_udp.saturating_add(1);
@@ -133,6 +155,8 @@ impl ServerState {
     }
   }
 
+  /// Selects the registered peer for a valid TUN packet, or records why the
+  /// packet must be dropped.
   fn classify_tun(&mut self, size: usize) -> TunPacketDecision {
     if size > self.mtu {
       self.stats.dropped_oversized_tun = self.stats.dropped_oversized_tun.saturating_add(1);
@@ -151,17 +175,20 @@ impl ServerState {
     }
   }
 
+  /// Records a successful UDP-to-TUN transfer.
   fn record_udp_to_tun(&mut self, size: usize) {
     self.stats.udp_to_tun_packets = self.stats.udp_to_tun_packets.saturating_add(1);
     self.stats.udp_to_tun_bytes = self.stats.udp_to_tun_bytes.saturating_add(size as u64);
   }
 
+  /// Records a successful TUN-to-UDP transfer.
   fn record_tun_to_udp(&mut self, size: usize) {
     self.stats.tun_to_udp_packets = self.stats.tun_to_udp_packets.saturating_add(1);
     self.stats.tun_to_udp_bytes = self.stats.tun_to_udp_bytes.saturating_add(size as u64);
   }
 }
 
+/// Bound server UDP socket and TUN device.
 pub struct Server {
   config: ServerConfig,
   socket: UdpSocket,
@@ -169,6 +196,9 @@ pub struct Server {
 }
 
 impl Server {
+  /// Binds the UDP socket and creates the configured TUN device.
+  ///
+  /// TUN creation generally requires root or CAP_NET_ADMIN on Linux.
   pub async fn bind(config: ServerConfig) -> anyhow::Result<Self> {
     let socket = UdpSocket::bind(config.bind_addr)
       .await
@@ -192,6 +222,8 @@ impl Server {
     })
   }
 
+  /// Forwards packets until Ctrl+C or an unrecoverable I/O error, then logs a
+  /// summary of forwarded and dropped traffic.
   pub async fn run(&self) -> anyhow::Result<()> {
     let mut state = ServerState::new(self.tun.mtu());
 
@@ -202,6 +234,10 @@ impl Server {
     result
   }
 
+  /// Runs the bidirectional single-peer forwarding loop.
+  ///
+  /// Both receive buffers are MTU plus one byte so oversized packets are
+  /// detected rather than accepted after truncation.
   async fn forward_packets(&self, state: &mut ServerState) -> anyhow::Result<()> {
     log::info!("UDP server listening on {}", self.config.bind_addr);
     let mtu = self.tun.mtu();

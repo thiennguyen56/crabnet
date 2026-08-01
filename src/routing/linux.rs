@@ -1,3 +1,8 @@
+//! Linux routing backend built on iproute2 and sysctl commands.
+//!
+//! Command construction and output parsing are isolated from execution so the
+//! behavior can be covered by unprivileged unit tests.
+
 use std::net::IpAddr;
 
 use anyhow::Context;
@@ -9,6 +14,7 @@ use super::manager::{AppliedOperation, ApplyOutcome, RouteBackend, RouteOperatio
 
 const IPV4_FORWARDING_KEY: &str = "net.ipv4.ip_forward";
 
+/// Captured result of an operating-system command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommandResult {
   success: bool,
@@ -17,16 +23,20 @@ pub(crate) struct CommandResult {
   stderr: String,
 }
 
+/// Minimal JSON shape returned by an ip route lookup.
 #[derive(Debug, Deserialize)]
 struct IpRouteLookup {
   gateway: Option<String>,
   dev: Option<String>,
 }
 
+/// Injectable asynchronous command executor.
 pub(crate) trait CommandRunner {
+  /// Executes one program with exact arguments and captures status and output.
   async fn run(&mut self, program: &str, args: &[String]) -> anyhow::Result<CommandResult>;
 }
 
+/// Production command runner backed by tokio::process::Command.
 #[derive(Debug, Default)]
 pub(crate) struct TokioCommandRunner;
 
@@ -49,11 +59,13 @@ impl CommandRunner for TokioCommandRunner {
   }
 }
 
+/// Linux implementation of route and IPv4-forwarding operations.
 pub(crate) struct LinuxRouteBackend<R> {
   runner: R,
 }
 
 impl<R> LinuxRouteBackend<R> {
+  /// Creates a Linux backend with the supplied command runner.
   pub(crate) fn new(runner: R) -> Self {
     Self { runner }
   }
@@ -97,6 +109,8 @@ impl<R> LinuxRouteBackend<R>
 where
   R: CommandRunner,
 {
+  /// Adds a missing route, leaves an identical route unowned, and rejects a
+  /// conflicting route.
   async fn apply_route(
     &mut self,
     destination: &IpNet,
@@ -128,6 +142,8 @@ where
     }
   }
 
+  /// Changes IPv4 forwarding only when necessary and captures the previous
+  /// value for restoration.
   async fn apply_ipv4_forwarding(&mut self, requested: bool) -> anyhow::Result<ApplyOutcome> {
     let current = read_ipv4_forwarding(&mut self.runner).await?;
 
@@ -149,6 +165,8 @@ where
     ))
   }
 
+  /// Removes an owned route only when it still matches the state Crabnet
+  /// installed.
   async fn revert_route(
     &mut self,
     destination: &IpNet,
@@ -186,6 +204,8 @@ where
     }
   }
 
+  /// Restores IPv4 forwarding to its captured value when it has not already
+  /// been restored.
   async fn revert_ipv4_forwarding(&mut self, previous: bool) -> anyhow::Result<()> {
     let current = read_ipv4_forwarding(&mut self.runner).await?;
 
@@ -205,6 +225,10 @@ where
     Ok(())
   }
 
+  /// Resolves the current gateway and output interface for a VPN endpoint.
+  ///
+  /// Full-tunnel clients must call this before installing a TUN default route
+  /// so the lookup cannot resolve through the tunnel itself.
   pub(crate) async fn resolve_underlay_route(
     &mut self,
     destination: IpAddr,
@@ -223,6 +247,7 @@ where
   }
 }
 
+/// Minimal JSON shape returned when inspecting installed routes.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct IpRoute {
   dst: Option<String>,
@@ -230,6 +255,7 @@ struct IpRoute {
   gateway: Option<String>,
 }
 
+/// Relationship between requested route state and current OS state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExistingRoute {
   Missing,
@@ -237,6 +263,9 @@ enum ExistingRoute {
   Conflicting,
 }
 
+/// Classifies exact-destination routes as missing, identical, or conflicting.
+///
+/// Any conflicting entry takes precedence over an identical entry.
 fn classify_existing_route(
   routes: &[IpRoute],
   destination: &IpNet,
@@ -267,6 +296,8 @@ fn classify_existing_route(
   }
 }
 
+/// Queries and classifies the current operating-system route for one exact
+/// destination.
 async fn inspect_route<R>(
   runner: &mut R,
   destination: &IpNet,
@@ -293,6 +324,7 @@ where
   ))
 }
 
+/// Builds arguments for an exact JSON route inspection.
 fn show_route_args(destination: &IpNet) -> Vec<String> {
   vec!["-j", "route", "show", "exact"]
     .into_iter()
@@ -301,10 +333,12 @@ fn show_route_args(destination: &IpNet) -> Vec<String> {
     .collect()
 }
 
+/// Builds arguments for reading the IPv4 forwarding sysctl.
 fn read_ipv4_forwarding_args() -> Vec<String> {
   vec!["-n".to_owned(), IPV4_FORWARDING_KEY.to_owned()]
 }
 
+/// Builds arguments for writing the IPv4 forwarding sysctl.
 fn write_ipv4_forwarding_args(enabled: bool) -> Vec<String> {
   vec![
     "-w".to_owned(),
@@ -312,6 +346,7 @@ fn write_ipv4_forwarding_args(enabled: bool) -> Vec<String> {
   ]
 }
 
+/// Parses the kernel's numeric IPv4 forwarding value.
 fn parse_ipv4_forwarding(stdout: &str) -> anyhow::Result<bool> {
   match stdout.trim() {
     "0" => Ok(false),
@@ -324,6 +359,7 @@ fn parse_ipv4_forwarding(stdout: &str) -> anyhow::Result<bool> {
   }
 }
 
+/// Reads and parses the current IPv4 forwarding setting.
 async fn read_ipv4_forwarding<R>(runner: &mut R) -> anyhow::Result<bool>
 where
   R: CommandRunner,
@@ -339,6 +375,7 @@ where
   parse_ipv4_forwarding(&result.stdout)
 }
 
+/// Writes the requested IPv4 forwarding setting.
 async fn write_ipv4_forwarding<R>(runner: &mut R, enabled: bool) -> anyhow::Result<()>
 where
   R: CommandRunner,
@@ -354,6 +391,8 @@ where
   Ok(())
 }
 
+/// Parses the first route lookup result into the gateway and output interface
+/// needed for a full-tunnel endpoint exclusion.
 fn parse_underlay_route(stdout: &str, destination: IpAddr) -> anyhow::Result<UnderlayRoute> {
   let routes: Vec<IpRouteLookup> =
     serde_json::from_str(stdout).context("failed to parse JSON returned by `ip -j route get`")?;
@@ -377,6 +416,8 @@ fn parse_underlay_route(stdout: &str, destination: IpAddr) -> anyhow::Result<Und
   Ok(UnderlayRoute { gateway, interface })
 }
 
+/// Compares an iproute2 destination with an IpNet, including its default-route
+/// keyword.
 fn destination_matches(actual: Option<&str>, expected: &IpNet) -> bool {
   match actual {
     Some("default") => expected.prefix_len() == 0,
@@ -385,6 +426,7 @@ fn destination_matches(actual: Option<&str>, expected: &IpNet) -> bool {
   }
 }
 
+/// Builds arguments for a JSON route lookup to one IP address.
 fn route_get_args(destination: IpAddr) -> Vec<String> {
   vec![
     "-j".to_owned(),
@@ -394,6 +436,7 @@ fn route_get_args(destination: IpAddr) -> Vec<String> {
   ]
 }
 
+/// Builds arguments for adding a route.
 fn route_add_args(
   destination: &IpNet,
   gateway: Option<IpAddr>,
@@ -418,6 +461,7 @@ fn route_add_args(
   args
 }
 
+/// Builds arguments for deleting the exact route Crabnet installed.
 fn route_delete_args(
   destination: &IpNet,
   gateway: Option<IpAddr>,
@@ -442,6 +486,7 @@ fn route_delete_args(
   args
 }
 
+/// Formats a route for logs and contextual error messages.
 fn route_description(
   destination: &IpNet,
   gateway: Option<IpAddr>,
@@ -457,6 +502,9 @@ fn route_description(
   description
 }
 
+/// Executes a command and converts a non-zero exit into a contextual error.
+///
+/// Successful stdout is returned to callers that need to parse it.
 async fn run_checked<R>(
   runner: &mut R,
   program: &str,

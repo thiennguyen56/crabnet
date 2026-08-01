@@ -60,7 +60,7 @@ needs firewall rules, NAT, DNS, and return-path automation.
 Run these as your normal user:
 
 ```bash
-cargo fmt --check
+cargo fmt --all -- --check
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build
@@ -99,9 +99,10 @@ being selected by the TUN default route. The current implementation refuses to
 replace an existing default route, so this full-tunnel procedure is limited to
 the isolated client namespace used below.
 
-### 3. Create the three namespaces and links
+### 3. Create the four namespaces and links
 
-Start with no existing `cn-client`, `cn-server`, or `cn-backend` namespaces.
+Start with no existing `cn-client`, `cn-server`, `cn-backend`, or `cn-service`
+namespaces.
 
 ```bash
 sudo ip netns add cn-client
@@ -122,8 +123,9 @@ sudo ip link set cn-back-service netns cn-backend
 sudo ip link set cn-service-veth netns cn-service
 ```
 
-The first veth carries Crabnet's UDP underlay. The second veth connects the
-server namespace to the private backend network.
+The first veth carries Crabnet's UDP underlay. The second connects the server
+to the backend router, and the third connects that router to the private
+service network.
 
 ### 4. Configure addresses and interfaces
 
@@ -184,8 +186,8 @@ sudo ip netns exec cn-server ping -c 2 172.16.0.2
 sudo ip netns exec cn-backend ping -c 2 10.10.0.2
 ```
 
-If either ping fails, stop here. Crabnet cannot work until both underlay links
-are reachable.
+If any ping fails, stop here. Crabnet cannot work until all three physical
+links are reachable.
 
 ### 6. Record forwarding state
 
@@ -278,7 +280,18 @@ sudo ip netns exec cn-client \
 The result must use `cn-client-veth`, not `crabnet0`. This prevents Crabnet's
 own UDP traffic from recursively entering the tunnel.
 
-### 9. Ping through the overlay
+Verify that a destination outside the client's directly connected TUN network
+uses the full-tunnel default route:
+
+```bash
+sudo ip netns exec cn-client \
+  ip route get 10.10.0.2
+```
+
+The result must use `crabnet0`. Together, these two lookups prove that the VPN
+endpoint stays on the underlay while ordinary traffic enters the tunnel.
+
+### 9. Verify direct overlay connectivity
 
 Run the ping inside the client namespace:
 
@@ -300,6 +313,10 @@ Client UDP -> TUN
 From Crabnet's perspective, TUN read means `local OS -> Crabnet`, while TUN
 write means `Crabnet -> local OS`. Therefore, `Client UDP -> TUN` injects the
 server response into the client kernel.
+
+This ping uses the directly connected `10.0.0.0/24` TUN network. It validates
+the tunnel transport, but not the full-tunnel default-route selection; the
+route lookup above and private-service request below validate that behavior.
 
 ### 10. Test HTTP behind the server
 
@@ -331,7 +348,10 @@ client OS
 → service HTTP server
 ```
 
-The explicit backend route sends the HTTP response back through the server.
+The explicit service and backend return routes send the HTTP response back
+through the server. Because `10.10.0.2` is outside the client's directly
+connected TUN network, this request also exercises the full-tunnel default
+route.
 
 ### 11. Diagnose failures
 

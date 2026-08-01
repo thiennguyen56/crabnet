@@ -1,3 +1,8 @@
+//! Command-line and TOML configuration.
+//!
+//! CLI values override file values. Cross-field validation happens after both
+//! sources are merged and before privileged resources are created.
+
 use crate::{routing::RoutingConfig, tun::TunConfig};
 use anyhow::{bail, ensure};
 use clap::{Parser, ValueEnum};
@@ -8,23 +13,32 @@ use std::path::PathBuf;
 
 const DEFAULT_PORT: u16 = 51820;
 
+/// Selects which Crabnet endpoint role to run.
 #[derive(ValueEnum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
+  /// Run a connected UDP client with one configured server.
   Client,
+  /// Run a UDP server that learns one active peer.
   Server,
 }
 
+/// Logging verbosity accepted by the CLI and configuration file.
 #[derive(ValueEnum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
+  /// Emit informational, warning, and error messages.
   Info,
+  /// Emit warning and error messages.
   Warn,
+  /// Emit debug and higher-severity messages.
   Debug,
+  /// Emit only error messages.
   Error,
 }
 
 impl LogLevel {
+  /// Converts this value into the filter used by env_logger.
   pub fn to_level_filter(self) -> log::LevelFilter {
     match self {
       LogLevel::Info => log::LevelFilter::Info,
@@ -35,6 +49,10 @@ impl LogLevel {
   }
 }
 
+/// Raw command-line arguments accepted by Crabnet.
+///
+/// Optional values are merged over either the selected configuration file or
+/// Config::default.
 #[derive(Parser, Debug)]
 pub struct Args {
   #[arg(long, help = "Local address [default: 0.0.0.0]")]
@@ -71,23 +89,34 @@ pub struct Args {
   config_path: Option<PathBuf>,
 }
 
+/// Complete runtime configuration after file parsing and CLI overrides.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
+  /// Selects the client or server endpoint and its UDP addresses.
   pub mode: ModeConfig,
+  /// Configures the TUN interface shared by the selected endpoint.
   pub tun: TunConfig,
+  /// Configures client routes or server-side forwarding behavior.
   #[serde(default)]
   pub routing: RoutingConfig,
+  /// Sets the process-wide logging filter.
   pub log_level: LogLevel,
 }
 
+/// Mode-specific UDP endpoint configuration.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ModeConfig {
+  /// Client UDP binding and fixed server endpoint.
   Client {
+    /// Local address on which the client UDP socket is bound.
     bind_addr: SocketAddr,
+    /// Remote Crabnet server to which the client socket connects.
     server_addr: SocketAddr,
   },
+  /// Server UDP binding configuration.
   Server {
+    /// Local address on which the server accepts UDP datagrams.
     bind_addr: SocketAddr,
   },
 }
@@ -112,11 +141,17 @@ impl Default for Config {
 }
 
 impl Config {
+  /// Reads and deserializes a complete TOML configuration file.
+  ///
+  /// Validation is deferred until CLI overrides have been applied by
+  /// Self::from_args.
   pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
     let content = fs::read_to_string(path)?;
     Ok(toml::from_str(&content)?)
   }
 
+  /// Builds the effective configuration by merging CLI arguments over a file
+  /// or over Self::default when no file is selected.
   pub fn from_args(args: &Args) -> anyhow::Result<Self> {
     let mut config = if let Some(path) = &args.config_path {
       Self::from_file(path)?
@@ -163,9 +198,13 @@ impl Config {
     Ok(config)
   }
 
+  /// Validates TUN settings, mode-specific options, and routing invariants.
+  ///
+  /// This rejects unimplemented NAT, cross-mode options, duplicate/default
+  /// protected routes, and split routes that contain the VPN server and would
+  /// recursively capture the transport.
   pub fn validate(&self) -> anyhow::Result<()> {
     self.tun.validate()?;
-
     ensure!(
       !self.routing.enable_nat,
       "routing.enable_nat is not implemented yet"
@@ -236,6 +275,7 @@ impl Config {
 }
 
 impl ModeConfig {
+  /// Returns the mode discriminator without exposing variant fields.
   pub fn kind(&self) -> Mode {
     match self {
       Self::Client { .. } => Mode::Client,
@@ -243,6 +283,7 @@ impl ModeConfig {
     }
   }
 
+  /// Returns the local UDP bind address for either endpoint mode.
   pub fn bind_addr(&self) -> SocketAddr {
     match self {
       Self::Client { bind_addr, .. } | Self::Server { bind_addr } => *bind_addr,
@@ -250,6 +291,7 @@ impl ModeConfig {
   }
 }
 
+/// Merges optional address and port overrides with an existing socket address.
 fn socket_addr(current: SocketAddr, ip: Option<IpAddr>, port: Option<u16>) -> SocketAddr {
   SocketAddr::new(
     ip.unwrap_or_else(|| current.ip()),

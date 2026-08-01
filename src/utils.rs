@@ -1,1 +1,1 @@
-
+//! Reserved shared utility helpers.

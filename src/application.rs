@@ -1,3 +1,9 @@
+//! Top-level application lifecycle and network-state ownership.
+//!
+//! Binding creates the endpoint first, resolves any full-tunnel underlay route,
+//! and then installs owned networking state. Running always attempts restoration
+//! after the forwarding loop stops.
+
 use anyhow::Context;
 
 use crate::client::{Client, ClientConfig};
@@ -12,18 +18,30 @@ type LinuxRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
 type ClientRouteManager = LinuxRouteManager;
 type ServerRouteManager = LinuxRouteManager;
 
+/// Bound Crabnet endpoint together with the network state it owns.
 pub enum Application {
+  /// Client forwarding runtime and its installed routes.
   Client {
+    /// Connected client endpoint.
     client: Client,
+    /// Manager that restores client routes on shutdown.
     routes: ClientRouteManager,
   },
+  /// Server forwarding runtime and its installed networking state.
   Server {
+    /// Single-peer server endpoint.
     server: Server,
+    /// Manager that restores server routes and forwarding state on shutdown.
     routing: ServerRouteManager,
   },
 }
 
 impl Application {
+  /// Creates the configured endpoint and installs its networking operations.
+  ///
+  /// Full-tunnel clients resolve the server underlay before installing the
+  /// endpoint exclusion and default route. Installation failures are rolled
+  /// back by RouteManager.
   pub async fn bind(config: Config) -> anyhow::Result<Self> {
     let Config {
       mode,
@@ -87,6 +105,10 @@ impl Application {
     }
   }
 
+  /// Runs packet forwarding and restores all owned network state afterward.
+  ///
+  /// Cleanup is attempted whether forwarding succeeds or fails. When both fail,
+  /// the forwarding error remains primary and cleanup context is attached.
   pub async fn run(self) -> anyhow::Result<()> {
     match self {
       Self::Client { client, mut routes } => {
@@ -108,6 +130,7 @@ impl Application {
   }
 }
 
+/// Combines forwarding and cleanup results without losing either failure.
 fn combine_run_and_cleanup(
   component: &str,
   run_result: anyhow::Result<()>,

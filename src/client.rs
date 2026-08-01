@@ -1,14 +1,24 @@
+//! Connected Crabnet client and bidirectional packet forwarding.
+//!
+//! Raw packets are copied unchanged between the local TUN and one connected
+//! UDP server. Packet classification remains separate for pure unit testing.
+
 use crate::{tun::TunConfig, tun::TunDevice};
 use anyhow::Context;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
+/// Resources and addresses required to bind a client endpoint.
 pub struct ClientConfig {
+  /// Local address for the connected UDP socket.
   pub bind_addr: SocketAddr,
+  /// Remote Crabnet server address.
   pub server_addr: SocketAddr,
+  /// Client TUN interface configuration.
   pub tun: TunConfig,
 }
 
+/// Saturating counters for forwarded and deliberately dropped client traffic.
 #[derive(Debug, Default)]
 struct ForwardingStats {
   tun_to_udp_packets: u64,
@@ -22,16 +32,19 @@ struct ForwardingStats {
 }
 
 impl ForwardingStats {
+  /// Records one successfully forwarded TUN-to-UDP packet.
   fn record_tun_to_udp(&mut self, size: usize) {
     self.tun_to_udp_packets = self.tun_to_udp_packets.saturating_add(1);
     self.tun_to_udp_bytes = self.tun_to_udp_bytes.saturating_add(size as u64);
   }
 
+  /// Records one successfully forwarded UDP-to-TUN packet.
   fn record_udp_to_tun(&mut self, size: usize) {
     self.udp_to_tun_packets = self.udp_to_tun_packets.saturating_add(1);
     self.udp_to_tun_bytes = self.udp_to_tun_bytes.saturating_add(size as u64);
   }
 
+  /// Emits the final client forwarding and drop counters.
   fn log_summary(&self) {
     log::info!(
       "Client forwarding summary: \
@@ -48,18 +61,21 @@ impl ForwardingStats {
   }
 }
 
+/// Result of validating a packet against the configured MTU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PacketDecision {
   Forward,
   DropOversized,
 }
 
+/// Mutable, unit-testable packet policy and counters for the forwarding loop.
 struct ClientState {
   mtu: usize,
   stats: ForwardingStats,
 }
 
 impl ClientState {
+  /// Creates client forwarding state for the specified MTU.
   fn new(mtu: usize) -> Self {
     Self {
       mtu,
@@ -67,6 +83,7 @@ impl ClientState {
     }
   }
 
+  /// Classifies a TUN packet and counts an oversized drop.
   fn classify_tun(&mut self, size: usize) -> PacketDecision {
     if size > self.mtu {
       self.stats.oversized_tun_packets = self.stats.oversized_tun_packets.saturating_add(1);
@@ -76,6 +93,7 @@ impl ClientState {
     }
   }
 
+  /// Classifies a UDP datagram and counts an oversized drop.
   fn classify_udp(&mut self, size: usize) -> PacketDecision {
     if size > self.mtu {
       self.stats.oversized_udp_packets = self.stats.oversized_udp_packets.saturating_add(1);
@@ -85,15 +103,18 @@ impl ClientState {
     }
   }
 
+  /// Records a successful TUN-to-UDP transfer.
   fn record_tun_to_udp(&mut self, size: usize) {
     self.stats.record_tun_to_udp(size);
   }
 
+  /// Records a successful UDP-to-TUN transfer.
   fn record_udp_to_tun(&mut self, size: usize) {
     self.stats.record_udp_to_tun(size);
   }
 }
 
+/// Bound client UDP socket and TUN device.
 pub struct Client {
   config: ClientConfig,
   socket: UdpSocket,
@@ -101,6 +122,9 @@ pub struct Client {
 }
 
 impl Client {
+  /// Binds and connects the UDP socket, then creates the configured TUN device.
+  ///
+  /// TUN creation generally requires root or CAP_NET_ADMIN on Linux.
   pub async fn bind(config: ClientConfig) -> anyhow::Result<Self> {
     let socket = UdpSocket::bind(config.bind_addr)
       .await
@@ -125,6 +149,8 @@ impl Client {
     })
   }
 
+  /// Forwards packets until Ctrl+C or an unrecoverable I/O error, then logs a
+  /// summary of forwarded and dropped traffic.
   pub async fn run(&self) -> anyhow::Result<()> {
     let mut state = ClientState::new(self.tun.mtu());
 
@@ -134,6 +160,10 @@ impl Client {
     result
   }
 
+  /// Runs the bidirectional forwarding loop with MTU-plus-one receive buffers.
+  ///
+  /// The extra byte distinguishes oversized traffic from valid MTU-sized
+  /// packets instead of silently accepting truncation.
   async fn forward(&self, state: &mut ClientState) -> anyhow::Result<()> {
     let mtu = self.tun.mtu();
 

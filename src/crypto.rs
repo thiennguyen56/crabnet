@@ -1,7 +1,11 @@
+//! Reserved cryptography extension point.
+
+/// Placeholder for a future authenticated-encryption implementation.
 pub struct Crypto {}
 
 impl Crypto {
-	pub fn new() -> Self {
-		Self {}
-	}
+  /// Creates the current no-op cryptography placeholder.
+  pub fn new() -> Self {
+    Self {}
+  }
 }

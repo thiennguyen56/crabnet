@@ -1,21 +1,15 @@
+//! Platform-neutral routing intent, operations, ownership, and rollback.
+//!
+//! The configuration describes requested behavior, operation builders translate
+//! it into concrete changes, a backend applies those changes, and RouteManager
+//! records only state Crabnet owns so it can restore safely.
+
 use std::net::IpAddr;
 
 use ipnet::IpNet;
 use serde::Deserialize;
 
-// RoutingConfig
-//     ↓ translates into
-// RouteOperation
-//     ↓ executed by
-// RouteBackend
-//     ↓ coordinated by
-// RouteManager
-
-// RoutingConfig describes what the user wants.
-// RouteOperation describes one concrete networking change.
-// RouteBackend knows how to interact with an operating system.
-// RouteManager applies operations, remembers ownership, and restores them.
-
+/// Declarative client and server routing configuration.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct RoutingConfig {
@@ -35,24 +29,27 @@ pub struct RoutingConfig {
   pub enable_nat: bool,
 }
 
+/// One concrete networking change requested from a route backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RouteOperation {
+  /// Adds a route with optional gateway and output interface.
   AddRoute {
     destination: IpNet,
     gateway: Option<IpAddr>,
     interface: Option<String>,
   },
-  SetIpv4Forwarding {
-    enabled: bool,
-  },
+  /// Changes the process namespace's IPv4 forwarding setting.
+  SetIpv4Forwarding { enabled: bool },
 }
 
+/// Result of applying an operation, including whether Crabnet owns a change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ApplyOutcome {
   Applied(AppliedOperation),
   Unchanged,
 }
 
+/// Networking state actually changed by Crabnet and eligible for restoration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AppliedOperation {
   RouteAdded {
@@ -65,13 +62,17 @@ pub(crate) enum AppliedOperation {
   },
 }
 
+/// Static server-side route toward a private destination.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct StaticRoute {
+  /// Destination prefix installed by the server.
   pub destination: IpNet,
 
+  /// Optional next-hop gateway.
   #[serde(default)]
   pub gateway: Option<IpAddr>,
 
+  /// Optional output interface.
   #[serde(default)]
   pub interface: Option<String>,
 }
@@ -79,15 +80,22 @@ pub struct StaticRoute {
 /// Current operating-system route to the Crabnet server endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnderlayRoute {
+  /// Gateway selected by the operating system, if the route is indirect.
   pub gateway: Option<IpAddr>,
+  /// Output interface selected by the operating system.
   pub interface: String,
 }
 
+/// Operating-system adapter for applying and reverting network operations.
 pub(crate) trait RouteBackend {
+  /// Applies one operation and reports whether Crabnet changed state.
   async fn apply(&mut self, operation: &RouteOperation) -> anyhow::Result<ApplyOutcome>;
+  /// Reverts one operation previously reported as applied.
   async fn revert(&mut self, operation: &AppliedOperation) -> anyhow::Result<()>;
 }
 
+/// Applies operations transactionally and retains ownership for later
+/// restoration.
 pub(crate) struct RouteManager<B> {
   backend: B,
   applied: Vec<AppliedOperation>,
@@ -97,6 +105,7 @@ impl<B> RouteManager<B>
 where
   B: RouteBackend,
 {
+  /// Creates an empty manager around the provided operating-system backend.
   pub(crate) fn new(backend: B) -> Self {
     Self {
       backend,
@@ -104,6 +113,10 @@ where
     }
   }
 
+  /// Applies operations in order and rolls back earlier changes on failure.
+  ///
+  /// A second install is rejected while previously applied state remains owned
+  /// by this manager.
   pub(crate) async fn install(&mut self, operations: &[RouteOperation]) -> anyhow::Result<()> {
     anyhow::ensure!(
       self.applied.is_empty(),
@@ -129,6 +142,10 @@ where
     Ok(())
   }
 
+  /// Restores owned operations in reverse order.
+  ///
+  /// Restoration continues after individual failures and retains failed items
+  /// so a later call can retry them.
   pub(crate) async fn restore(&mut self) -> anyhow::Result<()> {
     let mut errors = Vec::new();
     let mut failed = Vec::new();
@@ -151,6 +168,8 @@ where
   }
 }
 
+/// Translates split-tunnel destinations into routes through the client TUN in
+/// configuration order.
 pub(crate) fn split_tunnel_operations(
   config: &RoutingConfig,
   tun_name: &str,
@@ -167,6 +186,8 @@ pub(crate) fn split_tunnel_operations(
     .collect()
 }
 
+/// Translates server routes and optional IPv4 forwarding into ordered
+/// operations.
 pub(crate) fn server_operations(config: &RoutingConfig) -> Vec<RouteOperation> {
   let mut operations = config
     .server_routes
@@ -184,6 +205,11 @@ pub(crate) fn server_operations(config: &RoutingConfig) -> Vec<RouteOperation> {
   operations
 }
 
+/// Builds the ordered endpoint-exclusion and TUN-default operations.
+///
+/// The endpoint host route must be applied first so Crabnet's UDP transport
+/// remains on the resolved underlay. The default route follows and uses the TUN
+/// address family.
 pub(crate) fn full_tunnel_operations(
   tun_name: &str,
   tun_address: IpAddr,

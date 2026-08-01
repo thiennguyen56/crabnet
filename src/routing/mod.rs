@@ -1,3 +1,7 @@
+//! Routing configuration and Linux network-state management.
+//!
+//! Public callers configure routing through RoutingConfig.
+
 mod linux;
 mod manager;
 

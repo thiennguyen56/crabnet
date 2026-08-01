@@ -46,15 +46,74 @@ Important paths:
 
 ## Rust conventions
 
+### Style and naming
+
 - Follow `rustfmt.toml`: Rust 2021, two-space indentation, 100-column width, and reordered
   imports. Do not hand-format against `rustfmt` output.
+- Use standard Rust naming: `snake_case` for modules, functions, variables, and tests;
+  `UpperCamelCase` for types and traits; and `SCREAMING_SNAKE_CASE` for constants.
+- Prefer names that express networking direction or ownership, such as `tun_to_udp`,
+  `underlay`, `applied`, and `previous`, over generic names such as `data` or `state2`.
+- Keep imports grouped as standard library, external crates, then `crate`/`super` imports.
+  Let rustfmt order imports within those groups. Avoid glob imports outside test modules.
+- Keep functions focused on one responsibility. Extract pure parsing, classification, and
+  argument-building helpers when doing so makes privileged behavior testable in memory.
+- Prefer exhaustive `match` expressions for protocol, packet, peer, and route state. Avoid
+  catch-all arms when adding a variant should force callers to make an explicit decision.
+
+### Ownership and data
+
+- Borrow with `&T` or `&mut T` when ownership is not transferred. Clone only at a real
+  ownership boundary, especially for route/interface strings and packet buffers.
+- Use slices for packet data and avoid unnecessary allocation in forwarding loops. Allocate
+  reusable receive buffers before `tokio::select!`, not once per packet.
+- Keep mutable policy and counters in small state structs so decisions can be tested without
+  sockets or TUN devices.
+- Use saturating arithmetic for long-lived packet and byte counters.
 - Preserve raw packet bytes. Never interpret forwarded payloads as UTF-8.
+
+### Errors, logging, and unsafe code
+
+- Do not use `unwrap`, `expect`, `panic!`, `todo!`, or `unimplemented!` in production paths.
+  Return an error, reject unsupported configuration during validation, or handle the state
+  explicitly. They are acceptable in tests when failure means the fixture itself is invalid.
+- Use `anyhow::Result` at application and OS-integration boundaries. Use `ensure!` or `bail!`
+  for invariant violations and add `anyhow::Context` where an operation crosses an I/O,
+  parsing, command, socket, TUN, or configuration boundary.
+- Error messages must say what failed and include safe identifying context such as an
+  address, route, interface, peer, or configuration field. Never log raw packet payloads.
 - Propagate socket and TUN I/O failures with context. Deliberately dropped traffic must be
   observable through logs or counters.
+- Treat partial UDP or TUN writes as errors; never report a truncated packet as forwarded.
+- Avoid `unsafe`. If it becomes unavoidable, isolate it behind a small safe API, document a
+  `SAFETY:` invariant at every unsafe block, and add focused tests for the boundary.
+
+### Async and Tokio
+
+- Keep `tokio::select!` branches small and cancellation-aware. Move substantial branch logic
+  into ordinary async or pure helper functions when it improves readability or testing.
+- Create and pin the Ctrl+C future once outside the forwarding loop; do not recreate it on
+  every iteration.
+- Do not hold a synchronous lock or mutable borrow across `.await` unless its lifetime and
+  cancellation behavior are deliberate and documented.
+- Do not call blocking filesystem, process, or network APIs from packet-forwarding tasks.
+  Startup-only synchronous configuration reads are acceptable.
 - Receive UDP into an `MTU + 1` buffer so oversized datagrams can be detected and dropped
   without truncation being mistaken for a valid packet.
 - Keep the current single-peer server invariant: the first valid datagram selects the peer;
   empty, oversized, and unexpected-peer datagrams must not replace it.
+
+### Documentation and tests
+
+- Maintain the crate-level `missing_docs` lint. Document public modules, types, variants,
+  fields, and functions, plus private helpers whose invariants, side effects, ownership, or
+  failure behavior are not obvious.
+- Rustdoc should explain purpose and behavior rather than restating the signature. Mention
+  ordering requirements, privileged effects, cleanup ownership, and important error cases.
+- Keep `#[cfg(test)] mod tests` beside the code it covers. Name tests after observable
+  behavior, and cover success, boundary, rejection, rollback, and retry paths as applicable.
+- Prefer fake backends and command runners for OS integration. Unit tests must not require
+  root, create a real TUN device, or modify network namespaces.
 
 ## Routing invariants
 
