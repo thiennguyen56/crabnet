@@ -14,13 +14,14 @@ testable so the tunnel can be built incrementally.
 
 ## Local TUN tunnel test
 
-This is one end-to-end workflow using three Linux network namespaces:
+This is one end-to-end workflow using four Linux network namespaces:
 
 ```text
-cn-client                    cn-server                    cn-backend
-TUN 10.0.0.2                 TUN 10.0.0.1                 172.16.0.2
+cn-client                    cn-server             cn-backend             cn-service
+TUN 10.0.0.2                 TUN 10.0.0.1           172.16.0.2             10.10.0.2
 underlay 192.0.2.1 ────────  underlay 192.0.2.2
-                             backend 172.16.0.1 ───────── 172.16.0.2
+                             172.16.0.1 ────────── 172.16.0.2
+                                                       10.10.0.1 ──────── 10.10.0.2
 ```
 
 It verifies, in order:
@@ -29,6 +30,7 @@ It verifies, in order:
 underlay connectivity
 → TUN creation
 → client protected-route installation
+→ server_routes installation
 → server IPv4 forwarding
 → overlay ping
 → HTTP through the backend network
@@ -60,19 +62,24 @@ The client configuration must contain:
 
 ```toml
 [routing]
-protected_routes = ["172.16.0.0/24"]
+protected_routes = ["10.10.0.0/24"]
 ```
 
 The server configuration must contain:
 
 ```toml
 [routing]
+server_routes = [
+  { destination = "10.10.0.0/24", gateway = "172.16.0.2" }
+]
 enable_forwarding = true
 enable_nat = false
 ```
 
-The client route sends `172.16.0.0/24` into `crabnet0`. The server forwarding
-setting enables `net.ipv4.ip_forward`; NAT is deliberately not implemented.
+The client route sends `10.10.0.0/24` into `crabnet0`. The server route sends
+that destination through the backend router at `172.16.0.2`. The server
+forwarding setting enables `net.ipv4.ip_forward`; NAT is deliberately not
+implemented.
 
 ### 3. Create the three namespaces and links
 
@@ -82,6 +89,7 @@ Start with no existing `cn-client`, `cn-server`, or `cn-backend` namespaces.
 sudo ip netns add cn-client
 sudo ip netns add cn-server
 sudo ip netns add cn-backend
+sudo ip netns add cn-service
 
 sudo ip link add cn-client-veth type veth peer name cn-server-veth
 sudo ip link set cn-client-veth netns cn-client
@@ -90,6 +98,10 @@ sudo ip link set cn-server-veth netns cn-server
 sudo ip link add cn-srv-back type veth peer name cn-back-veth
 sudo ip link set cn-srv-back netns cn-server
 sudo ip link set cn-back-veth netns cn-backend
+
+sudo ip link add cn-back-service type veth peer name cn-service-veth
+sudo ip link set cn-back-service netns cn-backend
+sudo ip link set cn-service-veth netns cn-service
 ```
 
 The first veth carries Crabnet's UDP underlay. The second veth connects the
@@ -107,6 +119,10 @@ sudo ip netns exec cn-server \
   ip address add 172.16.0.1/24 dev cn-srv-back
 sudo ip netns exec cn-backend \
   ip address add 172.16.0.2/24 dev cn-back-veth
+sudo ip netns exec cn-backend \
+  ip address add 10.10.0.1/24 dev cn-back-service
+sudo ip netns exec cn-service \
+  ip address add 10.10.0.2/24 dev cn-service-veth
 
 sudo ip netns exec cn-client ip link set lo up
 sudo ip netns exec cn-client ip link set cn-client-veth up
@@ -117,6 +133,9 @@ sudo ip netns exec cn-server ip link set cn-srv-back up
 
 sudo ip netns exec cn-backend ip link set lo up
 sudo ip netns exec cn-backend ip link set cn-back-veth up
+sudo ip netns exec cn-backend ip link set cn-back-service up
+sudo ip netns exec cn-service ip link set lo up
+sudo ip netns exec cn-service ip link set cn-service-veth up
 ```
 
 The backend needs a return route for VPN client addresses:
@@ -124,16 +143,27 @@ The backend needs a return route for VPN client addresses:
 ```bash
 sudo ip netns exec cn-backend \
   ip route add 10.0.0.0/24 via 172.16.0.1
+sudo ip netns exec cn-service \
+  ip route add 10.0.0.0/24 via 10.10.0.1
+
+sudo ip netns exec cn-backend \
+  sysctl -w net.ipv4.ip_forward=1
 ```
 
 Without this route, requests can reach the backend but responses cannot return
 through the server.
+
+This route is intentionally still configured manually in the namespace test:
+the backend is outside the Crabnet process, so Crabnet cannot safely change its
+routing table. The application does automate the client protected route and
+server IPv4 forwarding.
 
 ### 5. Verify physical links
 
 ```bash
 sudo ip netns exec cn-client ping -c 2 192.0.2.2
 sudo ip netns exec cn-server ping -c 2 172.16.0.2
+sudo ip netns exec cn-backend ping -c 2 10.10.0.2
 ```
 
 If either ping fails, stop here. Crabnet cannot work until both underlay links
@@ -195,13 +225,26 @@ Verify the client-managed protected route:
 
 ```bash
 sudo ip netns exec cn-client \
-  ip route show exact 172.16.0.0/24
+  ip route show exact 10.10.0.0/24
 ```
 
 Expected output:
 
 ```text
-172.16.0.0/24 dev crabnet0
+10.10.0.0/24 dev crabnet0
+```
+
+Verify the server-managed route:
+
+```bash
+sudo ip netns exec cn-server \
+  ip route show exact 10.10.0.0/24
+```
+
+Expected output:
+
+```text
+10.10.0.0/24 via 172.16.0.2
 ```
 
 Also verify that the VPN server endpoint remains on the underlay:
@@ -242,15 +285,15 @@ server response into the client kernel.
 Start the backend server:
 
 ```bash
-sudo ip netns exec cn-backend \
-  python3 -m http.server 8080 --bind 172.16.0.2
+sudo ip netns exec cn-service \
+  python3 -m http.server 8080 --bind 10.10.0.2
 ```
 
 Request it from the client:
 
 ```bash
 sudo ip netns exec cn-client \
-  curl --fail http://172.16.0.2:8080
+  curl --fail http://10.10.0.2:8080
 ```
 
 The packet path is:
@@ -262,8 +305,9 @@ client OS
 → server UDP
 → server TUN
 → server IPv4 forwarding
-→ backend veth
-→ backend HTTP server
+→ server_routes via 172.16.0.2
+→ backend router
+→ service HTTP server
 ```
 
 The explicit backend route sends the HTTP response back through the server.
@@ -293,7 +337,7 @@ Stop the client with Ctrl+C first. Its log should include removal of the
 protected route:
 
 ```text
-Removed route 172.16.0.0/24 through crabnet0
+Removed route 10.10.0.0/24 dev crabnet0
 ```
 
 Then stop the server with Ctrl+C. Its log should include restoration of IPv4
@@ -317,6 +361,7 @@ Stop the backend HTTP server, then remove all namespaces:
 sudo ip netns delete cn-client
 sudo ip netns delete cn-server
 sudo ip netns delete cn-backend
+sudo ip netns delete cn-service
 ```
 
 Deleting the namespaces also removes their veth interfaces, TUN interfaces,
@@ -334,11 +379,11 @@ It removes only the Crabnet test namespaces and exact test veth names. Deleting
 helper does not change host routes, the host forwarding setting, or the host
 firewall.
 
-## Repeat the two-endpoint test automatically
+## Repeat the four-namespace test automatically
 
-The existing script automates the smaller client/server tunnel test. It is
-useful for quickly checking packet forwarding and graceful shutdown, but it
-does not yet create `cn-backend` or test server forwarding:
+The script creates the client, server, backend-router, and service namespaces,
+configures `server_routes` and both return routes, verifies routed overlay ping
+and backend HTTP, and checks route/sysctl cleanup:
 
 ```bash
 cargo build

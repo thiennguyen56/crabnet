@@ -5,14 +5,18 @@ set -Eeuo pipefail
 CLIENT_NS="cn-client"
 SERVER_NS="cn-server"
 BACKEND_NS="cn-backend"
+SERVICE_NS="cn-service"
 CLIENT_VETH="cn-client-veth"
 SERVER_VETH="cn-server-veth"
 SERVER_BACKEND_VETH="cn-srv-back"
 BACKEND_VETH="cn-back-veth"
+BACKEND_SERVICE_VETH="cn-back-service"
+SERVICE_VETH="cn-service-veth"
 CURRENT_STAGE="initialization"
 CLIENT_CREATED=0
 SERVER_CREATED=0
 BACKEND_CREATED=0
+SERVICE_CREATED=0
 VETH_CREATED=0
 CLIENT_PID=""
 SERVER_PID=""
@@ -45,6 +49,9 @@ cleanup() {
 	fi
 	if (( BACKEND_CREATED )); then
 		ip netns delete "$BACKEND_NS"
+	fi
+	if (( SERVICE_CREATED )); then
+		ip netns delete "$SERVICE_NS"
 	fi
 
 	if (( status != 0 )); then
@@ -106,7 +113,7 @@ done
 LOG_DIR="$(mktemp -d -t crabnet-test.XXXXXX)"
 
 if namespace_exists "$CLIENT_NS" || namespace_exists "$SERVER_NS" || \
-	namespace_exists "$BACKEND_NS"; then
+	namespace_exists "$BACKEND_NS" || namespace_exists "$SERVICE_NS"; then
 	echo "Refusing to continue: a test namespace already exists." >&2
 	echo "Remove or rename the existing namespace yourself, then retry." >&2
 	exit 1
@@ -125,6 +132,8 @@ run ip netns add "$SERVER_NS"
 SERVER_CREATED=1
 run ip netns add "$BACKEND_NS"
 BACKEND_CREATED=1
+run ip netns add "$SERVICE_NS"
+SERVICE_CREATED=1
 
 run ip link add "$CLIENT_VETH" type veth peer name "$SERVER_VETH"
 VETH_CREATED=1
@@ -135,10 +144,16 @@ run ip link add "$SERVER_BACKEND_VETH" type veth peer name "$BACKEND_VETH"
 run ip link set "$SERVER_BACKEND_VETH" netns "$SERVER_NS"
 run ip link set "$BACKEND_VETH" netns "$BACKEND_NS"
 
+run ip link add "$BACKEND_SERVICE_VETH" type veth peer name "$SERVICE_VETH"
+run ip link set "$BACKEND_SERVICE_VETH" netns "$BACKEND_NS"
+run ip link set "$SERVICE_VETH" netns "$SERVICE_NS"
+
 run ip -n "$CLIENT_NS" address add 192.0.2.1/24 dev "$CLIENT_VETH"
 run ip -n "$SERVER_NS" address add 192.0.2.2/24 dev "$SERVER_VETH"
 run ip -n "$SERVER_NS" address add 172.16.0.1/24 dev "$SERVER_BACKEND_VETH"
 run ip -n "$BACKEND_NS" address add 172.16.0.2/24 dev "$BACKEND_VETH"
+run ip -n "$BACKEND_NS" address add 10.10.0.1/24 dev "$BACKEND_SERVICE_VETH"
+run ip -n "$SERVICE_NS" address add 10.10.0.2/24 dev "$SERVICE_VETH"
 run ip -n "$CLIENT_NS" link set lo up
 run ip -n "$SERVER_NS" link set lo up
 run ip -n "$BACKEND_NS" link set lo up
@@ -146,13 +161,19 @@ run ip -n "$CLIENT_NS" link set "$CLIENT_VETH" up
 run ip -n "$SERVER_NS" link set "$SERVER_VETH" up
 run ip -n "$SERVER_NS" link set "$SERVER_BACKEND_VETH" up
 run ip -n "$BACKEND_NS" link set "$BACKEND_VETH" up
+run ip -n "$BACKEND_NS" link set "$BACKEND_SERVICE_VETH" up
+run ip -n "$SERVICE_NS" link set lo up
+run ip -n "$SERVICE_NS" link set "$SERVICE_VETH" up
 
-CURRENT_STAGE="configuring backend return route"
+CURRENT_STAGE="configuring routed backend"
+run ip netns exec "$BACKEND_NS" sysctl -w net.ipv4.ip_forward=1
 run ip -n "$BACKEND_NS" route add 10.0.0.0/24 via 172.16.0.1
+run ip -n "$SERVICE_NS" route add 10.0.0.0/24 via 10.10.0.1
 
 CURRENT_STAGE="underlay ping"
 run ip netns exec "$CLIENT_NS" ping -c 2 -W 2 192.0.2.2
 run ip netns exec "$SERVER_NS" ping -c 2 -W 2 172.16.0.2
+run ip netns exec "$BACKEND_NS" ping -c 2 -W 2 10.10.0.2
 
 CURRENT_STAGE="recording IPv4 forwarding state"
 INITIAL_FORWARDING="$(ip netns exec "$SERVER_NS" sysctl -n net.ipv4.ip_forward)"
@@ -191,9 +212,15 @@ run ip -n "$CLIENT_NS" route show
 run ip -n "$SERVER_NS" route show
 
 CURRENT_STAGE="checking automatic routes and forwarding"
-client_route="$(ip -n "$CLIENT_NS" route show exact 172.16.0.0/24)"
+client_route="$(ip -n "$CLIENT_NS" route show exact 10.10.0.0/24)"
 if [[ "$client_route" != *"dev crabnet0"* ]]; then
 	echo "Protected client route was not installed: $client_route" >&2
+	exit 1
+fi
+
+server_route="$(ip -n "$SERVER_NS" route show exact 10.10.0.0/24)"
+if [[ "$server_route" != *"via 172.16.0.2"* ]]; then
+	echo "Server route was not installed: $server_route" >&2
 	exit 1
 fi
 
@@ -209,18 +236,18 @@ if [[ "$current_forwarding" != "1" ]]; then
 	exit 1
 fi
 
-CURRENT_STAGE="overlay ping"
-run ip netns exec "$CLIENT_NS" ping -c 4 -W 2 -I 10.0.0.2 10.0.0.1
+CURRENT_STAGE="routed overlay ping"
+run ip netns exec "$CLIENT_NS" ping -c 4 -W 2 -I 10.0.0.2 10.10.0.2
 
-CURRENT_STAGE="HTTP behind server"
-echo "+ ip netns exec $BACKEND_NS python3 -m http.server 8080 --bind 172.16.0.2"
-ip netns exec "$BACKEND_NS" python3 -m http.server 8080 --bind 172.16.0.2 \
+CURRENT_STAGE="HTTP behind routed server"
+echo "+ ip netns exec $SERVICE_NS python3 -m http.server 8080 --bind 10.10.0.2"
+ip netns exec "$SERVICE_NS" python3 -m http.server 8080 --bind 10.10.0.2 \
 	>"$LOG_DIR/http.log" 2>&1 &
 HTTP_PID=$!
 
 for _ in {1..20}; do
 	if ip netns exec "$CLIENT_NS" curl --fail --silent --show-error \
-		--connect-timeout 1 http://172.16.0.2:8080/ \
+		--connect-timeout 1 http://10.10.0.2:8080/ \
 		>"$LOG_DIR/http-response.html"; then
 		break
 	fi
@@ -231,11 +258,14 @@ run test -s "$LOG_DIR/http-response.html"
 stop_crabnet
 
 CURRENT_STAGE="checking shutdown state"
-if [[ -n "$(ip -n "$CLIENT_NS" route show exact 172.16.0.0/24)" ]]; then
+if [[ -n "$(ip -n "$CLIENT_NS" route show exact 10.10.0.0/24)" ]]; then
 	echo "Protected route remains after client shutdown" >&2
 	exit 1
 fi
-
+if [[ -n "$(ip -n "$SERVER_NS" route show exact 10.10.0.0/24)" ]]; then
+	echo "Server route remains after server shutdown" >&2
+	exit 1
+fi
 if [[ "$INITIAL_FORWARDING" == "0" ]]; then
 	final_forwarding="$(ip netns exec "$SERVER_NS" sysctl -n net.ipv4.ip_forward)"
 	if [[ "$final_forwarding" != "0" ]]; then
@@ -253,7 +283,9 @@ fi
 CURRENT_STAGE="checking shutdown summaries"
 run grep -F "Client forwarding summary" "$LOG_DIR/client.log"
 run grep -F "Server forwarding summary" "$LOG_DIR/server.log"
-run grep -F "Removed route 172.16.0.0/24 through crabnet0" "$LOG_DIR/client.log"
+run grep -F "Removed route 10.10.0.0/24 dev crabnet0" "$LOG_DIR/client.log"
+run grep -F "Installed route 10.10.0.0/24 via 172.16.0.2" "$LOG_DIR/server.log"
+run grep -F "Removed route 10.10.0.0/24 via 172.16.0.2" "$LOG_DIR/server.log"
 if [[ "$INITIAL_FORWARDING" == "0" ]]; then
 	run grep -F "Restored IPv4 forwarding to 0" "$LOG_DIR/server.log"
 fi
@@ -264,4 +296,4 @@ if [[ -n "$HTTP_PID" ]] && kill -0 "$HTTP_PID" 2>/dev/null; then
 fi
 HTTP_PID=""
 
-echo "PASS: underlay, overlay, split route, forwarding, backend HTTP, and cleanup succeeded."
+echo "PASS: underlay, routed server route, overlay, backend HTTP, and cleanup succeeded."

@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use anyhow::Context;
 use ipnet::IpNet;
 use serde::Deserialize;
@@ -60,7 +62,12 @@ where
       RouteOperation::AddRoute {
         destination,
         interface,
-      } => self.apply_route(destination, interface).await,
+        gateway,
+      } => {
+        self
+          .apply_route(destination, *gateway, interface.as_deref())
+          .await
+      }
       RouteOperation::SetIpv4Forwarding { enabled } => self.apply_ipv4_forwarding(*enabled).await,
     }
   }
@@ -70,7 +77,8 @@ where
       AppliedOperation::RouteAdded {
         destination,
         interface,
-      } => self.revert_route(destination, interface).await,
+        gateway,
+      } => self.revert_route(destination, gateway, interface).await,
 
       AppliedOperation::Ipv4ForwardingChanged { previous } => {
         self.revert_ipv4_forwarding(*previous).await
@@ -86,31 +94,32 @@ where
   async fn apply_route(
     &mut self,
     destination: &IpNet,
-    interface: &str,
+    gateway: Option<IpAddr>,
+    interface: Option<&str>,
   ) -> anyhow::Result<ApplyOutcome> {
-    match inspect_route(&mut self.runner, destination, interface).await? {
-        ExistingRoute::Identical => {
-          log::debug!("Route {destination} through {interface} already exists");
-          Ok(ApplyOutcome::Unchanged)
-        }
-        ExistingRoute::Conflicting => anyhow::bail!(
-          "cannot install route {destination} through {interface}: a conflicting route already exists"
-        ),
-        ExistingRoute::Missing => {
-          run_checked(
-            &mut self.runner,
-            "ip",
-            &add_route_args(destination, interface),
-            &format!("failed to add route {destination} through {interface}"),
-          )
-          .await?;
-          log::info!("Installed route {destination} through {interface}");
-          Ok(ApplyOutcome::Applied(AppliedOperation::RouteAdded {
-            destination: *destination,
-            interface: interface.to_string(),
-          }))
-        }
+    let description = route_description(destination, gateway, interface);
+
+    match inspect_route(&mut self.runner, destination, gateway, interface).await? {
+      ExistingRoute::Identical => Ok(ApplyOutcome::Unchanged),
+      ExistingRoute::Conflicting => {
+        anyhow::bail!("cannot install route {description}: a conflicting route already exists")
       }
+      ExistingRoute::Missing => {
+        run_checked(
+          &mut self.runner,
+          "ip",
+          &route_add_args(destination, gateway, interface),
+          &format!("failed to add route {description}"),
+        )
+        .await?;
+        log::info!("Installed route {description}");
+        Ok(ApplyOutcome::Applied(AppliedOperation::RouteAdded {
+          destination: *destination,
+          gateway,
+          interface: interface.map(str::to_owned),
+        }))
+      }
+    }
   }
 
   async fn apply_ipv4_forwarding(&mut self, requested: bool) -> anyhow::Result<ApplyOutcome> {
@@ -134,24 +143,38 @@ where
     ))
   }
 
-  async fn revert_route(&mut self, destination: &IpNet, interface: &str) -> anyhow::Result<()> {
-    match inspect_route(&mut self.runner, destination, interface).await? {
+  async fn revert_route(
+    &mut self,
+    destination: &IpNet,
+    gateway: &Option<IpAddr>,
+    interface: &Option<String>,
+  ) -> anyhow::Result<()> {
+    let description = route_description(destination, *gateway, interface.as_deref());
+
+    match inspect_route(
+      &mut self.runner,
+      destination,
+      *gateway,
+      interface.as_deref(),
+    )
+    .await?
+    {
       ExistingRoute::Missing => {
-        log::warn!("Route {destination} through {interface} was already removed");
+        log::warn!("Route {description} was already removed");
         Ok(())
       }
       ExistingRoute::Conflicting => anyhow::bail!(
-        "refusing to remove route {destination}: routing state changed after Crabnet installed it"
+        "refusing to remove route {description}: routing state changed after Crabnet installed it"
       ),
       ExistingRoute::Identical => {
         run_checked(
           &mut self.runner,
           "ip",
-          &delete_route_args(destination, interface),
-          &format!("failed to remove route {destination} through {interface}"),
+          &route_delete_args(destination, *gateway, interface.as_deref()),
+          &format!("failed to remove route {description}"),
         )
         .await?;
-        log::info!("Removed route {destination} through {interface}");
+        log::info!("Removed route {description}");
         Ok(())
       }
     }
@@ -194,21 +217,23 @@ enum ExistingRoute {
 fn classify_existing_route(
   routes: &[IpRoute],
   destination: &IpNet,
-  interface: &str,
+  gateway: Option<IpAddr>,
+  interface: Option<&str>,
 ) -> ExistingRoute {
   let destination = destination.to_string();
+  let gateway = gateway.map(|value| value.to_string());
   if routes.is_empty() {
     return ExistingRoute::Missing;
   }
 
   let identical = routes.iter().any(|route| {
     route.dst.as_deref() == Some(destination.as_str())
-      && route.dev.as_deref() == Some(interface)
-      && route.gateway.is_none()
+      && route.gateway == gateway
+      && route.dev.as_deref() == interface
   });
   let conflicting = routes.iter().any(|route| {
     route.dst.as_deref() == Some(destination.as_str())
-      && !(route.dev.as_deref() == Some(interface) && route.gateway.is_none())
+      && !(route.gateway == gateway && route.dev.as_deref() == interface)
   });
 
   if conflicting {
@@ -223,7 +248,8 @@ fn classify_existing_route(
 async fn inspect_route<R>(
   runner: &mut R,
   destination: &IpNet,
-  interface: &str,
+  gateway: Option<IpAddr>,
+  interface: Option<&str>,
 ) -> anyhow::Result<ExistingRoute>
 where
   R: CommandRunner,
@@ -237,7 +263,12 @@ where
   .await?;
   let routes: Vec<IpRoute> = serde_json::from_str(&result.stdout)
     .context("failed to parse JSON returned by `ip -j route show`")?;
-  Ok(classify_existing_route(&routes, destination, interface))
+  Ok(classify_existing_route(
+    &routes,
+    destination,
+    gateway,
+    interface,
+  ))
 }
 
 fn show_route_args(destination: &IpNet) -> Vec<String> {
@@ -246,24 +277,6 @@ fn show_route_args(destination: &IpNet) -> Vec<String> {
     .map(str::to_owned)
     .chain(std::iter::once(destination.to_string()))
     .collect()
-}
-
-fn route_change_args(action: &str, destination: &IpNet, interface: &str) -> Vec<String> {
-  vec![
-    "route".to_owned(),
-    action.to_owned(),
-    destination.to_string(),
-    "dev".to_owned(),
-    interface.to_owned(),
-  ]
-}
-
-fn add_route_args(destination: &IpNet, interface: &str) -> Vec<String> {
-  route_change_args("add", destination, interface)
-}
-
-fn delete_route_args(destination: &IpNet, interface: &str) -> Vec<String> {
-  route_change_args("del", destination, interface)
 }
 
 fn read_ipv4_forwarding_args() -> Vec<String> {
@@ -317,6 +330,69 @@ where
   .await?;
 
   Ok(())
+}
+
+fn route_add_args(
+  destination: &IpNet,
+  gateway: Option<IpAddr>,
+  interface: Option<&str>,
+) -> Vec<String> {
+  let mut args = vec![
+    "route".to_owned(),
+    "add".to_owned(),
+    destination.to_string(),
+  ];
+
+  if let Some(gateway) = gateway {
+    args.push("via".to_owned());
+    args.push(gateway.to_string());
+  }
+
+  if let Some(interface) = interface {
+    args.push("dev".to_owned());
+    args.push(interface.to_owned());
+  }
+
+  args
+}
+
+fn route_delete_args(
+  destination: &IpNet,
+  gateway: Option<IpAddr>,
+  interface: Option<&str>,
+) -> Vec<String> {
+  let mut args = vec![
+    "route".to_string(),
+    "del".to_string(),
+    destination.to_string(),
+  ];
+
+  if let Some(gateway) = gateway {
+    args.push("via".to_string());
+    args.push(gateway.to_string());
+  }
+
+  if let Some(interface) = interface {
+    args.push("dev".to_string());
+    args.push(interface.to_string());
+  }
+
+  args
+}
+
+fn route_description(
+  destination: &IpNet,
+  gateway: Option<IpAddr>,
+  interface: Option<&str>,
+) -> String {
+  let mut description = destination.to_string();
+  if let Some(gateway) = gateway {
+    description.push_str(&format!(" via {gateway}"));
+  }
+  if let Some(interface) = interface {
+    description.push_str(&format!(" dev {interface}"));
+  }
+  description
 }
 
 async fn run_checked<R>(
@@ -396,14 +472,32 @@ mod tests {
   fn operation() -> RouteOperation {
     RouteOperation::AddRoute {
       destination: "172.16.0.0/24".parse().unwrap(),
-      interface: "crabnet0".to_owned(),
+      interface: Some("crabnet0".to_owned()),
+      gateway: None,
+    }
+  }
+
+  fn gateway_operation() -> RouteOperation {
+    RouteOperation::AddRoute {
+      destination: "10.0.0.0/24".parse().unwrap(),
+      gateway: Some("172.16.0.1".parse().unwrap()),
+      interface: None,
     }
   }
 
   fn applied() -> AppliedOperation {
     AppliedOperation::RouteAdded {
       destination: "172.16.0.0/24".parse().unwrap(),
-      interface: "crabnet0".to_owned(),
+      interface: Some("crabnet0".to_owned()),
+      gateway: None,
+    }
+  }
+
+  fn applied_gateway() -> AppliedOperation {
+    AppliedOperation::RouteAdded {
+      destination: "10.0.0.0/24".parse().unwrap(),
+      gateway: Some("172.16.0.1".parse().unwrap()),
+      interface: None,
     }
   }
 
@@ -424,7 +518,7 @@ mod tests {
       ["-j", "route", "show", "exact", "172.16.0.0/24"]
     );
     assert_eq!(
-      add_route_args(&destination, "crabnet0"),
+      route_add_args(&destination, None, Some("crabnet0")),
       ["route", "add", "172.16.0.0/24", "dev", "crabnet0"]
     );
   }
@@ -437,6 +531,29 @@ mod tests {
       ApplyOutcome::Applied(applied())
     );
     assert_eq!(backend.runner.calls.len(), 2);
+  }
+
+  #[tokio::test]
+  async fn gateway_route_is_added_and_deleted() {
+    let mut add_backend = backend(vec![success("[]"), success("")]);
+    assert!(matches!(
+      add_backend.apply(&gateway_operation()).await.unwrap(),
+      ApplyOutcome::Applied(AppliedOperation::RouteAdded { .. })
+    ));
+    assert_eq!(
+      add_backend.runner.calls[1].args,
+      ["route", "add", "10.0.0.0/24", "via", "172.16.0.1"]
+    );
+
+    let mut backend = backend(vec![
+      success(r#"[{"dst":"10.0.0.0/24","gateway":"172.16.0.1"}]"#),
+      success(""),
+    ]);
+    backend.revert(&applied_gateway()).await.unwrap();
+    assert_eq!(
+      backend.runner.calls[1].args,
+      ["route", "del", "10.0.0.0/24", "via", "172.16.0.1"]
+    );
   }
 
   #[tokio::test]

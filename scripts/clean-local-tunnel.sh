@@ -33,10 +33,12 @@ done
 delete_namespace cn-client
 delete_namespace cn-server
 delete_namespace cn-backend
+delete_namespace cn-service
 
 # These are exact test-interface names. They can remain in the host namespace
 # only if setup was interrupted before the links were moved into namespaces.
 for link in cn-client-veth cn-server-veth cn-srv-back cn-back-veth \
+  cn-back-service cn-service-veth \
   cn-server-backend cn-backend-veth; do
   if ip link show "$link" >/dev/null 2>&1; then
     echo "+ ip link delete $link"

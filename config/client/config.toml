@@ -12,4 +12,4 @@ prefix_len = 24
 mtu = 1400
 
 [routing]
-protected_routes = ["172.16.0.0/24"]
+protected_routes = ["10.10.0.0/24"]

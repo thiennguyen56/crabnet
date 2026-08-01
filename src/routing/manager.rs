@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use ipnet::IpNet;
 use serde::Deserialize;
 
@@ -17,7 +19,12 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct RoutingConfig {
+  /// Routes installed on the client through the TUN device.
   pub protected_routes: Vec<IpNet>,
+
+  /// Routes installed on the server toward backend networks.
+  pub server_routes: Vec<StaticRoute>,
+
   pub enable_forwarding: bool,
   pub enable_nat: bool,
 }
@@ -26,7 +33,8 @@ pub struct RoutingConfig {
 pub(crate) enum RouteOperation {
   AddRoute {
     destination: IpNet,
-    interface: String,
+    gateway: Option<IpAddr>,
+    interface: Option<String>,
   },
   SetIpv4Forwarding {
     enabled: bool,
@@ -43,11 +51,23 @@ pub(crate) enum ApplyOutcome {
 pub(crate) enum AppliedOperation {
   RouteAdded {
     destination: IpNet,
-    interface: String,
+    gateway: Option<IpAddr>,
+    interface: Option<String>,
   },
   Ipv4ForwardingChanged {
     previous: bool,
   },
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StaticRoute {
+  pub destination: IpNet,
+
+  #[serde(default)]
+  pub gateway: Option<IpAddr>,
+
+  #[serde(default)]
+  pub interface: Option<String>,
 }
 
 pub(crate) trait RouteBackend {
@@ -124,18 +144,28 @@ pub(crate) fn client_operations(config: &RoutingConfig, tun_name: &str) -> Vec<R
     .iter()
     .cloned()
     .map(|destination| RouteOperation::AddRoute {
+      gateway: None,
       destination,
-      interface: tun_name.to_owned(),
+      interface: Some(tun_name.to_owned()),
     })
     .collect()
 }
 
 pub(crate) fn server_operations(config: &RoutingConfig) -> Vec<RouteOperation> {
+  let mut operations = config
+    .server_routes
+    .iter()
+    .map(|route| RouteOperation::AddRoute {
+      destination: route.destination,
+      gateway: route.gateway,
+      interface: route.interface.clone(),
+    })
+    .collect::<Vec<_>>();
+
   if config.enable_forwarding {
-    vec![RouteOperation::SetIpv4Forwarding { enabled: true }]
-  } else {
-    Vec::new()
+    operations.push(RouteOperation::SetIpv4Forwarding { enabled: true });
   }
+  operations
 }
 
 #[cfg(test)]
@@ -164,10 +194,12 @@ mod tests {
         RouteOperation::AddRoute {
           destination,
           interface,
+          gateway,
         } => {
           let requested = AppliedOperation::RouteAdded {
             destination: *destination,
             interface: interface.clone(),
+            gateway: *gateway,
           };
           let existing = self.existing.iter().find(|existing| match existing {
             AppliedOperation::RouteAdded {
@@ -244,14 +276,16 @@ mod tests {
   fn route(destination: &str, interface: &str) -> RouteOperation {
     RouteOperation::AddRoute {
       destination: destination.parse().unwrap(),
-      interface: interface.to_owned(),
+      interface: Some(interface.to_owned()),
+      gateway: None,
     }
   }
 
   fn applied_route(destination: &str, interface: &str) -> AppliedOperation {
     AppliedOperation::RouteAdded {
       destination: destination.parse().unwrap(),
-      interface: interface.to_owned(),
+      interface: Some(interface.to_owned()),
+      gateway: None,
     }
   }
 
