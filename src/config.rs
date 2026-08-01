@@ -3,8 +3,8 @@
 //! CLI values override file values. Cross-field validation happens after both
 //! sources are merged and before privileged resources are created.
 
-use crate::{routing::RoutingConfig, tun::TunConfig};
-use anyhow::{bail, ensure};
+use crate::{nat::validate_nft_interface_name, routing::RoutingConfig, tun::TunConfig};
+use anyhow::{bail, ensure, Context};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::fs;
@@ -205,10 +205,6 @@ impl Config {
   /// recursively capture the transport.
   pub fn validate(&self) -> anyhow::Result<()> {
     self.tun.validate()?;
-    ensure!(
-      !self.routing.enable_nat,
-      "routing.enable_nat is not implemented yet"
-    );
 
     for (index, route) in self.routing.protected_routes.iter().enumerate() {
       ensure!(
@@ -229,8 +225,11 @@ impl Config {
     match &self.mode {
       ModeConfig::Client { server_addr, .. } => {
         ensure!(
-          !self.routing.enable_forwarding && !self.routing.enable_nat,
-          "routing.enable_forwarding and routing.enable_nat are server-only options"
+          !self.routing.enable_forwarding
+            && !self.routing.enable_nat
+            && self.routing.nat_egress_interface.is_none(),
+          "routing.enable_forwarding, routing.enable_nat, and \
+               routing.nat_egress_interface are server-only options"
         );
 
         ensure!(
@@ -242,7 +241,7 @@ impl Config {
           ensure!(
             self.routing.protected_routes.is_empty(),
             "routing.protected_routes must be empty when \
-             routing.full_tunnel is enabled"
+                 routing.full_tunnel is enabled"
           );
         }
 
@@ -267,6 +266,42 @@ impl Config {
           !self.routing.full_tunnel,
           "routing.full_tunnel is a client-only option"
         );
+
+        if self.routing.enable_nat {
+          ensure!(
+            self.routing.enable_forwarding,
+            "routing.enable_nat requires routing.enable_forwarding = true"
+          );
+
+          ensure!(
+            self.tun.address.is_ipv4(),
+            "routing.enable_nat currently supports only IPv4 TUN addresses"
+          );
+
+          ensure!(
+            self.tun.prefix_len != 0,
+            "routing.enable_nat refuses to masquerade the default network"
+          );
+
+          validate_nft_interface_name("tun.name", &self.tun.name)?;
+          let egress = self
+            .routing
+            .nat_egress_interface
+            .as_deref()
+            .context("routing.enable_nat requires routing.nat_egress_interface")?;
+
+          validate_nft_interface_name("routing.nat_egress_interface", egress)?;
+
+          ensure!(
+            egress != self.tun.name,
+            "routing.nat_egress_interface must differ from tun.name"
+          );
+        } else {
+          ensure!(
+            self.routing.nat_egress_interface.is_none(),
+            "routing.nat_egress_interface requires routing.enable_nat = true"
+          );
+        }
       }
     }
 
@@ -410,20 +445,92 @@ mod tests {
       .contains("use routing.full_tunnel instead"));
   }
 
-  #[test]
-  fn rejects_nat_while_unimplemented() {
-    let mut config = Config {
+  fn server_config() -> Config {
+    Config {
       mode: ModeConfig::Server {
         bind_addr: "0.0.0.0:51821".parse().unwrap(),
       },
+      tun: TunConfig {
+        name: "crabnet0".to_owned(),
+        address: "10.0.0.1".parse().unwrap(),
+        prefix_len: 24,
+        mtu: 1400,
+      },
       ..Config::default()
-    };
+    }
+  }
+
+  #[test]
+  fn accepts_valid_server_nat() {
+    let mut config = server_config();
+    config.routing.enable_forwarding = true;
+    config.routing.enable_nat = true;
+    config.routing.nat_egress_interface = Some("eth0".to_owned());
+
+    config.validate().unwrap();
+  }
+
+  #[test]
+  fn rejects_nat_without_forwarding() {
+    let mut config = server_config();
+    config.routing.enable_nat = true;
+    config.routing.nat_egress_interface = Some("eth0".to_owned());
+
+    let error = config.validate().unwrap_err();
+
+    assert!(error
+      .to_string()
+      .contains("requires routing.enable_forwarding"));
+  }
+
+  #[test]
+  fn rejects_nat_without_egress_interface() {
+    let mut config = server_config();
+    config.routing.enable_forwarding = true;
     config.routing.enable_nat = true;
 
     let error = config.validate().unwrap_err();
+
     assert!(error
       .to_string()
-      .contains("routing.enable_nat is not implemented yet"));
+      .contains("requires routing.nat_egress_interface"));
+  }
+
+  #[test]
+  fn rejects_nat_egress_equal_to_tun() {
+    let mut config = server_config();
+    config.routing.enable_forwarding = true;
+    config.routing.enable_nat = true;
+    config.routing.nat_egress_interface = Some("crabnet0".to_owned());
+
+    let error = config.validate().unwrap_err();
+
+    assert!(error.to_string().contains("must differ from tun.name"));
+  }
+
+  #[test]
+  fn rejects_nat_with_ipv6_tun() {
+    let mut config = server_config();
+    config.tun.address = "fd00::1".parse().unwrap();
+    config.tun.prefix_len = 64;
+    config.tun.mtu = 1280;
+    config.routing.enable_forwarding = true;
+    config.routing.enable_nat = true;
+    config.routing.nat_egress_interface = Some("eth0".to_owned());
+
+    let error = config.validate().unwrap_err();
+
+    assert!(error.to_string().contains("only IPv4 TUN addresses"));
+  }
+
+  #[test]
+  fn rejects_inert_nat_egress_interface() {
+    let mut config = server_config();
+    config.routing.nat_egress_interface = Some("eth0".to_owned());
+
+    let error = config.validate().unwrap_err();
+
+    assert!(error.to_string().contains("requires routing.enable_nat"));
   }
 
   #[test]

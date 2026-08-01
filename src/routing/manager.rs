@@ -25,8 +25,11 @@ pub struct RoutingConfig {
   /// Server-only IPv4 forwarding.
   pub enable_forwarding: bool,
 
-  /// Reserved for a later NAT milestone.
+  /// Enables server-side IPv4 source NAT for traffic arriving from TUN.
   pub enable_nat: bool,
+
+  /// Server egress interface on which NAT masquerading is applied.
+  pub nat_egress_interface: Option<String>,
 }
 
 /// One concrete networking change requested from a route backend.

@@ -213,9 +213,14 @@ Client application
 That requires additional server configuration:
 
 - IP forwarding enabled.
-- A route from the client to 192.168.1.0/24 through its TUN.
-- A return route from the private network to the Crabnet subnet, or NAT on the server.
-- Firewall rules permitting forwarding.
+- A client split route or full-tunnel default route through TUN.
+- A server route toward the destination network.
+- Either a private-side return route to the Crabnet subnet or server-side NAT.
+- Administrator-managed firewall rules permitting forwarding.
 
-The current code implements the packet transport portion, but route management, forwarding/NAT, authentication,
-encryption, and multi-client routing are still future layers.
+The current Linux implementation manages client/server routes, IPv4 forwarding,
+and optional IPv4 masquerading through a dedicated nftables table. The
+four-namespace test selects NAT: the private service has no route to the
+Crabnet subnet and observes the server egress address as the translated source.
+
+Authentication, encryption, firewall-policy automation, DNS handling, and

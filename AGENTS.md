@@ -9,8 +9,8 @@ subtree develops genuinely different build, test, or safety requirements.
 
 Crabnet is a Linux-only learning prototype that forwards raw IP packets between a TUN
 device and UDP using Rust and Tokio. It is not a production VPN: the server supports one
-unauthenticated peer, and encryption, replay protection, NAT, firewall automation, and
-full-tunnel DNS handling are not implemented.
+unauthenticated peer, and encryption, replay protection, firewall automation, and full-tunnel
+DNS handling are not implemented. Server-side IPv4 masquerading is available for the lab.
 
 Important paths:
 
@@ -20,6 +20,8 @@ Important paths:
 - `src/routing/manager.rs`: platform-neutral route operations, ownership, rollback, and
   restoration.
 - `src/routing/linux.rs`: Linux `iproute2` and `sysctl` backend.
+- `src/nat/manager.rs`: platform-neutral NAT ownership, retry, and restoration.
+- `src/nat/linux.rs`: Linux nftables inspection, atomic installation, and cleanup.
 - `src/config.rs`: TOML/CLI parsing and cross-field validation.
 - `config/`: namespace-lab client and server examples.
 - `scripts/test-local-tunnel.sh`: privileged four-namespace integration test.
@@ -127,9 +129,15 @@ Important paths:
   it.
 - The current full-tunnel implementation is for isolated routing domains without a
   conflicting default route. Do not silently replace a host default route.
-- `server_routes`, IPv4 forwarding, and future NAT behavior are server-only.
-  `enable_nat = true` must remain rejected until NAT is actually implemented and tested.
-- Backend and service return routes are environment-owned; Crabnet must not mutate them.
+- `server_routes`, IPv4 forwarding, and NAT are server-only.
+- NAT is IPv4-only and requires forwarding plus an explicit egress interface distinct from
+  the TUN interface.
+- Crabnet owns only the dedicated `ip crabnet_nat` table. Refuse startup if it already
+  exists because a new process cannot prove ownership of pre-existing state.
+- Apply NAT atomically. Ignore changing packet/byte counters when comparing ownership, but
+  refuse cleanup after any structural nftables change.
+- NAT does not grant ownership of host firewall policy or DNS configuration.
+- The namespace test must prove NAT without private-side routes to the VPN subnet.
 
 ## Verification
 
@@ -157,7 +165,7 @@ sudo scripts/test-local-tunnel.sh
 
 It creates and deletes the `cn-client`, `cn-server`, `cn-backend`, and `cn-service`
 network namespaces and requires Linux, root or `CAP_NET_ADMIN`, `iproute2`, `sysctl`,
-`ping`, `curl`, and Python. Do not run it implicitly: state the host-level effects and get
+`nftables`, `ping`, `curl`, and Python. Do not run it implicitly: state the effects and get
 explicit authorization first. Preserve the printed log directory when it fails.
 
 If a privileged check cannot be run, report that clearly and distinguish it from the
@@ -179,11 +187,12 @@ A change is complete only when:
 
 - Flag any path that can route the VPN server endpoint into the TUN default route. Safe
   path: resolve the underlay first and install a more-specific endpoint exclusion.
+- Flag NAT cleanup that deletes a pre-existing or structurally changed nftables table.
 - Flag rollback that removes unowned or externally changed routes/sysctls. Safe path:
   record only applied operations, compare before removal, and restore in reverse order.
 - Flag packet handling that can truncate or reinterpret binary data. Safe path: preserve
   byte slices and use `MTU + 1` for oversize detection.
-- Flag claims that full internet tunneling or production security is complete while NAT,
-  firewall, DNS, authentication, or encryption remains absent.
+- Flag claims that full internet tunneling or production security is complete while
+  firewall policy, DNS, authentication, or encryption remains absent.
 - Flag unit tests that create real TUN devices or namespaces when the branch can be tested
   through a pure helper or fake backend.

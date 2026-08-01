@@ -76,9 +76,21 @@ server_routes = [
   { destination = "10.10.0.0/24", gateway = "172.16.0.2" }
 ]
 enable_forwarding = true
-enable_nat = false
+enable_nat = true
+nat_egress_interface = "cn-srv-back"
 ```
 
-`enable_nat = true` is rejected because NAT is not implemented. The backend's
-return route is outside Crabnet's process and must be configured by the
-environment.
+`enable_nat` is server-only and currently supports IPv4. It requires
+`enable_forwarding = true`, a non-default TUN prefix, and an explicit
+`nat_egress_interface` different from the TUN name. The egress interface
+keeps masquerading scoped to the intended underlay instead of guessing on
+multi-homed servers.
+
+Crabnet creates a dedicated `ip crabnet_nat` nftables table. The rule matches
+the TUN input interface, canonical TUN source network, and configured egress
+interface. Startup fails if that table already exists because a new process
+cannot prove ownership. During graceful shutdown, Crabnet removes the table
+only if it still matches the state installed at startup.
+
+NAT does not configure DNS or host firewall policy. A restrictive firewall
+may still require administrator-managed forwarding rules.

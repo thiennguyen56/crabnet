@@ -15,4 +15,5 @@ server_routes = [
   { destination = "10.10.0.0/24", gateway = "172.16.0.2" }
 ]
 enable_forwarding = true
-enable_nat = false
+enable_nat = true
+nat_egress_interface = "cn-srv-back"

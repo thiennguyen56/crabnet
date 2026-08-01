@@ -106,7 +106,7 @@ if (( EUID != 0 )); then
 	exit 1
 fi
 
-for command in ip sysctl ping curl python3 awk grep sed mktemp sleep test; do
+for command in ip nft sysctl ping curl python3 awk grep sed mktemp sleep test; do
 	require_command "$command"
 done
 
@@ -167,8 +167,9 @@ run ip -n "$SERVICE_NS" link set "$SERVICE_VETH" up
 
 CURRENT_STAGE="configuring routed backend"
 run ip netns exec "$BACKEND_NS" sysctl -w net.ipv4.ip_forward=1
-run ip -n "$BACKEND_NS" route add 10.0.0.0/24 via 172.16.0.1
-run ip -n "$SERVICE_NS" route add 10.0.0.0/24 via 10.10.0.1
+# The service has no route to the VPN subnet. Successful return traffic
+# therefore proves that server-side masquerading is active.
+run ip -n "$SERVICE_NS" route add default via 10.10.0.1
 
 CURRENT_STAGE="underlay ping"
 run ip netns exec "$CLIENT_NS" ping -c 2 -W 2 192.0.2.2
@@ -242,12 +243,30 @@ if [[ "$current_forwarding" != "1" ]]; then
 	exit 1
 fi
 
+CURRENT_STAGE="checking server NAT"
+if ! ip netns exec "$SERVER_NS" nft list table ip crabnet_nat \
+	>"$LOG_DIR/nft-running.txt" 2>&1; then
+	echo "Crabnet NAT table was not installed:" >&2
+	sed -n '1,120p' "$LOG_DIR/nft-running.txt" >&2
+	exit 1
+fi
+run grep -F "masquerade" "$LOG_DIR/nft-running.txt"
+
+if [[ -n "$(ip -n "$BACKEND_NS" route show exact 10.0.0.0/24)" ]]; then
+	echo "Backend unexpectedly has a VPN return route" >&2
+	exit 1
+fi
+if [[ -n "$(ip -n "$SERVICE_NS" route show exact 10.0.0.0/24)" ]]; then
+	echo "Service unexpectedly has a VPN return route" >&2
+	exit 1
+fi
+
 CURRENT_STAGE="routed overlay ping"
 run ip netns exec "$CLIENT_NS" ping -c 4 -W 2 -I 10.0.0.2 10.10.0.2
 
 CURRENT_STAGE="HTTP behind routed server"
-echo "+ ip netns exec $SERVICE_NS python3 -m http.server 8080 --bind 10.10.0.2"
-ip netns exec "$SERVICE_NS" python3 -m http.server 8080 --bind 10.10.0.2 \
+echo "+ ip netns exec $SERVICE_NS python3 -u -m http.server 8080 --bind 10.10.0.2"
+ip netns exec "$SERVICE_NS" python3 -u -m http.server 8080 --bind 10.10.0.2 \
 	>"$LOG_DIR/http.log" 2>&1 &
 HTTP_PID=$!
 
@@ -277,6 +296,16 @@ if [[ ! -s "$LOG_DIR/http-response.html" ]]; then
 fi
 run test -s "$LOG_DIR/http-response.html"
 
+CURRENT_STAGE="checking translated HTTP source"
+if ! grep -F "172.16.0.1" "$LOG_DIR/http.log"; then
+	echo "HTTP service did not observe the translated server address:" >&2
+	sed -n '1,120p' "$LOG_DIR/http.log" >&2
+	exit 1
+fi
+ip netns exec "$SERVER_NS" nft list table ip crabnet_nat \
+	>"$LOG_DIR/nft-after-traffic.txt"
+run grep -E "counter packets [1-9][0-9]*" "$LOG_DIR/nft-after-traffic.txt"
+
 stop_crabnet
 
 CURRENT_STAGE="checking shutdown state"
@@ -290,6 +319,10 @@ if [[ -n "$(ip -n "$CLIENT_NS" route show default)" ]]; then
 fi
 if [[ -n "$(ip -n "$SERVER_NS" route show exact 10.10.0.0/24)" ]]; then
 	echo "Server route remains after server shutdown" >&2
+	exit 1
+fi
+if ip netns exec "$SERVER_NS" nft list table ip crabnet_nat >/dev/null 2>&1; then
+	echo "Crabnet NAT table remains after server shutdown" >&2
 	exit 1
 fi
 if [[ "$INITIAL_FORWARDING" == "0" ]]; then
@@ -315,6 +348,8 @@ run grep -F "Removed route 0.0.0.0/0 dev crabnet0" "$LOG_DIR/client.log"
 run grep -F "Removed route 192.0.2.2/32 dev $CLIENT_VETH" "$LOG_DIR/client.log"
 run grep -F "Installed route 10.10.0.0/24 via 172.16.0.2" "$LOG_DIR/server.log"
 run grep -F "Removed route 10.10.0.0/24 via 172.16.0.2" "$LOG_DIR/server.log"
+run grep -F "Installed IPv4 NAT" "$LOG_DIR/server.log"
+run grep -F "Removed nftables table ip crabnet_nat" "$LOG_DIR/server.log"
 if [[ "$INITIAL_FORWARDING" == "0" ]]; then
 	run grep -F "Restored IPv4 forwarding to 0" "$LOG_DIR/server.log"
 fi
@@ -325,4 +360,4 @@ if [[ -n "$HTTP_PID" ]] && kill -0 "$HTTP_PID" 2>/dev/null; then
 fi
 HTTP_PID=""
 
-echo "PASS: full tunnel, underlay exclusion, routed service, HTTP, and cleanup succeeded."
+echo "PASS: full tunnel, NAT, routed service, HTTP, and cleanup succeeded."

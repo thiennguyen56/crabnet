@@ -1,9 +1,9 @@
 # Routing sequence diagrams
 
-These diagrams show the two intended traffic paths. The private-service path
-is covered by the current four-namespace full-tunnel test. Global internet
-access is future work because it still requires NAT, firewall rules, and DNS
-handling.
+These diagrams show the implemented namespace traffic path and the remaining
+internet-facing path. The private-service test covers full-tunnel selection,
+server routing, IPv4 forwarding, and source NAT. General internet use remains
+future work because firewall policy and full-tunnel DNS are not managed.
 
 ## Private service routing
 
@@ -15,6 +15,7 @@ sequenceDiagram
     participant U as Underlay UDP
     participant S as Crabnet server
     participant STun as Server TUN
+    participant NAT as Server nftables NAT
     participant R as Backend router
     participant P as Private service
 
@@ -23,12 +24,13 @@ sequenceDiagram
     C->>U: Encapsulate and send UDP
     U->>S: Deliver UDP datagram
     S->>STun: Write inner packet
-    STun->>S: Server forwarding
-    S->>R: Route 10.10.0.0/24<br/>via 172.16.0.2
-    R->>P: Forward to 10.10.0.2
-    P-->>R: Response to 10.0.0.2
-    R-->>S: Return via 172.16.0.1
-    S->>STun: Write response to TUN
+    STun->>NAT: Forward 10.0.0.2 → 10.10.0.2
+    NAT->>R: Masquerade as 172.16.0.1<br/>route via 172.16.0.2
+    R->>P: Forward translated request
+    P-->>R: Response to 172.16.0.1
+    R-->>NAT: Return through connected network
+    NAT-->>STun: Restore destination 10.0.0.2
+    STun->>S: Read response from TUN
     S->>U: Encapsulate response in UDP
     U->>C: Deliver UDP datagram
     C->>CTun: Write response packet
@@ -62,7 +64,7 @@ sequenceDiagram
     participant U as Underlay UDP
     participant S as Crabnet server
     participant STun as Server TUN
-    participant NAT as Server NAT/firewall
+    participant NAT as Server nftables NAT
     participant I as Internet service
 
     App->>CTun: Send packet<br/>10.0.0.2 → 8.8.8.8
@@ -70,12 +72,11 @@ sequenceDiagram
     C->>U: Encapsulate and send UDP
     U->>S: Deliver UDP datagram
     S->>STun: Write inner packet
-    STun->>S: Forward toward default route
-    S->>NAT: Apply source NAT<br/>10.0.0.2 → server public IP
-    NAT->>I: Send packet to 8.8.8.8
+    STun->>NAT: Forward and masquerade<br/>10.0.0.2 → server public IP
+    NAT->>I: Send translated packet
     I-->>NAT: Internet response
-    NAT-->>S: Restore destination 10.0.0.2
-    S->>STun: Write response to server TUN
+    NAT-->>STun: Restore destination 10.0.0.2
+    STun->>S: Read response from TUN
     S->>U: Encapsulate response in UDP
     U->>C: Deliver UDP datagram
     C->>CTun: Write response packet
@@ -83,9 +84,10 @@ sequenceDiagram
 ```
 
 The client default route and VPN-server endpoint exclusion are implemented for
-the isolated namespace test. The remaining global path requires:
+the isolated namespace test. Server IPv4 forwarding, masquerading, ownership
+checks, and graceful NAT cleanup are also implemented. The remaining global
+path requires:
 
-- server NAT/masquerading;
-- firewall forwarding rules;
-- DNS handling; and
-- route and firewall cleanup during shutdown.
+- administrator-managed firewall forwarding policy;
+- full-tunnel DNS handling; and
+- authentication and encryption before use on untrusted networks.

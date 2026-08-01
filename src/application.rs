@@ -8,6 +8,7 @@ use anyhow::Context;
 
 use crate::client::{Client, ClientConfig};
 use crate::config::{Config, ModeConfig};
+use crate::nat::{build_nat_spec, LinuxNatBackend, NatManager, TokioNatCommandRunner};
 use crate::routing::{
   full_tunnel_operations, server_operations, split_tunnel_operations, LinuxRouteBackend,
   RouteManager, TokioCommandRunner,
@@ -17,6 +18,7 @@ use crate::server::{Server, ServerConfig};
 type LinuxRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
 type ClientRouteManager = LinuxRouteManager;
 type ServerRouteManager = LinuxRouteManager;
+type LinuxNatManager = NatManager<LinuxNatBackend<TokioNatCommandRunner>>;
 
 /// Bound Crabnet endpoint together with the network state it owns.
 pub enum Application {
@@ -33,6 +35,9 @@ pub enum Application {
     server: Server,
     /// Manager that restores server routes and forwarding state on shutdown.
     routing: ServerRouteManager,
+
+    /// Manager that restores that Crabnet-owned nftables tables.
+    nat: LinuxNatManager,
   },
 }
 
@@ -87,20 +92,42 @@ impl Application {
       }
 
       ModeConfig::Server { bind_addr } => {
+        let nat_spec = build_nat_spec(&tun, &routing)?;
+
         let config = ServerConfig { bind_addr, tun };
         let server = Server::bind(config).await?;
 
+        let mut nat = NatManager::new(LinuxNatBackend::new(TokioNatCommandRunner));
+
+        if let Some(spec) = nat_spec.as_ref() {
+          nat
+            .install(spec)
+            .await
+            .context("failed to configure server NAT")?;
+        }
+
         let operations = server_operations(&routing);
-
         let backend = LinuxRouteBackend::new(TokioCommandRunner);
-
         let mut routing = RouteManager::new(backend);
 
-        routing
-          .install(&operations)
-          .await
-          .context("failed to configure server networking")?;
-        Ok(Self::Server { server, routing })
+        if let Err(routing_error) = routing.install(&operations).await {
+          let nat_cleanup = nat.restore().await;
+
+          return match nat_cleanup {
+            Ok(()) => Err(routing_error.context("failed to configure server networking")),
+
+            Err(nat_error) => Err(routing_error.context(format!(
+              "failed to configure server networking; \
+                   NAT rollback also failed: {nat_error:#}"
+            ))),
+          };
+        }
+
+        Ok(Self::Server {
+          server,
+          routing,
+          nat,
+        })
       }
     }
   }
@@ -119,14 +146,42 @@ impl Application {
       Self::Server {
         server,
         mut routing,
+        mut nat,
       } => {
         let run_result = server.run().await;
-        let cleanup_result = routing.restore().await;
+        let routing_cleanup = routing.restore().await;
+
+        let nat_cleanup = nat.restore().await;
+        let cleanup_result =
+          combine_cleanup_results("server routing", routing_cleanup, "server NAT", nat_cleanup);
+
         combine_run_and_cleanup("server", run_result, cleanup_result)?;
       }
     }
 
     Ok(())
+  }
+}
+
+/// Combines two cleanup results without skipping or losing either failure.
+fn combine_cleanup_results(
+  first_component: &str,
+  first: anyhow::Result<()>,
+  second_component: &str,
+  second: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+  match (first, second) {
+    (Ok(()), Ok(())) => Ok(()),
+
+    (Err(error), Ok(())) => Err(error.context(format!("{first_component} cleanup failed"))),
+
+    (Ok(()), Err(error)) => Err(error.context(format!("{second_component} cleanup failed"))),
+
+    (Err(first_error), Err(second_error)) => Err(first_error.context(format!(
+      "{first_component} cleanup failed; \
+           {second_component} cleanup also failed: \
+           {second_error:#}"
+    ))),
   }
 }
 
@@ -186,5 +241,29 @@ mod tests {
     let message = format!("{error:#}");
     assert!(message.contains("run failed"));
     assert!(message.contains("restore failed"));
+  }
+
+  #[test]
+  fn cleanup_combiner_preserves_both_failures() {
+    let error = combine_cleanup_results(
+      "routing",
+      failure("route cleanup failed"),
+      "NAT",
+      failure("NAT cleanup failed"),
+    )
+    .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains("route cleanup failed"));
+    assert!(message.contains("NAT cleanup failed"));
+  }
+
+  #[test]
+  fn cleanup_combiner_reports_nat_failure() {
+    let error =
+      combine_cleanup_results("routing", Ok(()), "NAT", failure("NAT cleanup failed")).unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains("NAT cleanup failed"));
   }
 }

@@ -4,7 +4,7 @@
 
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
-client split/full-tunnel routes through `iproute2`, and server IPv4 forwarding.
+client split/full-tunnel routes, server IPv4 forwarding, and IPv4 masquerading.
 
 ## Documentation
 
@@ -45,15 +45,18 @@ underlay connectivity
 → client endpoint-exclusion and default-route installation
 → server_routes installation
 → server IPv4 forwarding
+→ server nftables masquerading
 → overlay ping
 → HTTP through the backend network
-→ route and sysctl restoration
+→ translated source-address verification
+→ route, sysctl, and nftables restoration
 ```
 
-The test requires Linux, `sudo`, `iproute2`, `sysctl`, `ping`, `curl`, and
-Python. TUN, namespace, route, and forwarding operations require root or
-`CAP_NET_ADMIN`. Do not test `google.com` yet; full-internet tunneling still
-needs firewall rules, NAT, DNS, and return-path automation.
+The test requires Linux, `sudo`, `iproute2`, `nftables`, `sysctl`, `ping`,
+`curl`, and Python. TUN, namespace, route, forwarding, and NAT operations
+require root or `CAP_NET_ADMIN`. Do not claim general internet access yet:
+Crabnet does not manage firewall forwarding policy or full-tunnel DNS, and the
+namespace test exercises a controlled private service rather than the internet.
 
 ### 1. Build and check
 
@@ -85,13 +88,15 @@ server_routes = [
   { destination = "10.10.0.0/24", gateway = "172.16.0.2" }
 ]
 enable_forwarding = true
-enable_nat = false
+enable_nat = true
+nat_egress_interface = "cn-srv-back"
 ```
 
 The client installs a `/32` underlay route for the VPN server, then a default
 route through `crabnet0`. The server route sends `10.10.0.0/24` through the
 backend router at `172.16.0.2`. The server forwarding setting enables
-`net.ipv4.ip_forward`; NAT is deliberately not implemented.
+`net.ipv4.ip_forward`; NAT masquerades traffic arriving from `crabnet0` and
+leaving through `cn-srv-back`.
 
 Crabnet resolves the server's underlay gateway and interface before installing
 the default route. This ordering prevents the VPN's own UDP transport from
@@ -158,25 +163,21 @@ sudo ip netns exec cn-service ip link set lo up
 sudo ip netns exec cn-service ip link set cn-service-veth up
 ```
 
-The backend needs a return route for VPN client addresses:
+Give the service its ordinary default gateway and enable forwarding on the
+backend router:
 
 ```bash
-sudo ip netns exec cn-backend \
-  ip route add 10.0.0.0/24 via 172.16.0.1
 sudo ip netns exec cn-service \
-  ip route add 10.0.0.0/24 via 10.10.0.1
+  ip route add default via 10.10.0.1
 
 sudo ip netns exec cn-backend \
   sysctl -w net.ipv4.ip_forward=1
 ```
 
-Without this route, requests can reach the backend but responses cannot return
-through the server.
-
-This route is intentionally still configured manually in the namespace test:
-the backend is outside the Crabnet process, so Crabnet cannot safely change its
-routing table. The application does automate the client's full-tunnel routes
-and server IPv4 forwarding.
+Do not add a `10.0.0.0/24` route to the backend or service. Crabnet translates
+the client source `10.0.0.2` to the server egress address `172.16.0.1`, so
+the response follows ordinary connected and default routes. This absence of
+VPN return routes is what makes the lab prove NAT rather than routing alone.
 
 ### 5. Verify physical links
 
@@ -240,6 +241,16 @@ Expected forwarding output while the server runs:
 ```text
 1
 ```
+
+Verify the dedicated NAT table:
+
+```bash
+sudo ip netns exec cn-server \
+  nft list table ip crabnet_nat
+```
+
+The postrouting chain must contain a rule matching `crabnet0`,
+`cn-srv-back`, `10.0.0.0/24`, and `masquerade`.
 
 Verify the client-managed endpoint exclusion and default route:
 
@@ -324,7 +335,7 @@ Start the backend server:
 
 ```bash
 sudo ip netns exec cn-service \
-  python3 -m http.server 8080 --bind 10.10.0.2
+  python3 -u -m http.server 8080 --bind 10.10.0.2
 ```
 
 Request it from the client:
@@ -344,14 +355,17 @@ client OS
 → server TUN
 → server IPv4 forwarding
 → server_routes via 172.16.0.2
+→ nftables masquerade 10.0.0.2 to 172.16.0.1
 → backend router
 → service HTTP server
 ```
 
-The explicit service and backend return routes send the HTTP response back
-through the server. Because `10.10.0.2` is outside the client's directly
-connected TUN network, this request also exercises the full-tunnel default
-route.
+The service log must show `172.16.0.1` as the HTTP client address, not
+`10.0.0.2`. The service returns traffic through its normal default gateway,
+and nftables connection tracking reverses the translation before the server
+routes the response back through TUN. Because `10.10.0.2` is outside the
+client's directly connected TUN network, this request also exercises the
+full-tunnel default route.
 
 ### 11. Diagnose failures
 
@@ -369,8 +383,9 @@ The first missing observation identifies the failing layer:
 - No client TUN packet: client route or namespace problem.
 - Client TUN but no server UDP: underlay or socket problem.
 - Server UDP but no server TUN: server TUN write problem.
-- Server TUN but no backend traffic: forwarding or backend route problem.
-- Backend receives but client times out: return-route problem.
+- Server TUN but no backend traffic: forwarding, server route, or firewall problem.
+- Backend receives `10.0.0.2` as source: NAT rule or egress-interface mismatch.
+- Service receives the request but client times out: NAT return-state or routing problem.
 
 ### 12. Shut down and verify restoration
 
@@ -383,17 +398,21 @@ Removed route 192.0.2.2/32 dev cn-client-veth
 ```
 
 Then stop the server with Ctrl+C. Its log should include restoration of IPv4
-forwarding. Check the value again:
+forwarding and removal of the owned NAT table. Check both:
 
 ```bash
 sudo ip netns exec cn-server \
   sysctl -n net.ipv4.ip_forward
+sudo ip netns exec cn-server \
+  nft list table ip crabnet_nat
 ```
 
 If the original value was `0`, it should now be `0`. If it was `1`, it should
-remain `1`. A route or forwarding operation that fails during cleanup remains
-tracked for retry. Cleanup cannot run after `SIGKILL`, a kernel crash, or power
-loss.
+remain `1`. The nft command should fail because the table no longer exists.
+Crabnet refuses to remove the table if another process changed it after
+installation. A route, forwarding, or NAT operation that fails during cleanup
+remains tracked for retry. Cleanup cannot run after `SIGKILL`, a kernel crash,
+or power loss.
 
 ### 13. Clean up
 
@@ -424,9 +443,9 @@ firewall.
 ## Repeat the four-namespace test automatically
 
 The script creates the client, server, backend-router, and service namespaces,
-configures the client full-tunnel routes, `server_routes`, and both return
-routes, verifies routed overlay ping and backend HTTP, and checks route/sysctl
-cleanup:
+configures the client full-tunnel routes, server routing, forwarding, and NAT,
+verifies the translated HTTP source without VPN return routes, and checks
+route, sysctl, and nftables cleanup:
 
 ```bash
 cargo build
