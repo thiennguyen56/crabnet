@@ -106,7 +106,7 @@ if (( EUID != 0 )); then
 	exit 1
 fi
 
-for command in ip sysctl ping curl python3 awk grep mktemp sleep test; do
+for command in ip sysctl ping curl python3 awk grep sed mktemp sleep test; do
 	require_command "$command"
 done
 
@@ -246,13 +246,29 @@ ip netns exec "$SERVICE_NS" python3 -m http.server 8080 --bind 10.10.0.2 \
 HTTP_PID=$!
 
 for _ in {1..20}; do
-	if ip netns exec "$CLIENT_NS" curl --fail --silent --show-error \
-		--connect-timeout 1 http://10.10.0.2:8080/ \
+	if ! kill -0 "$HTTP_PID" 2>/dev/null; then
+		echo "HTTP server exited unexpectedly:" >&2
+		sed -n '1,120p' "$LOG_DIR/http.log" >&2
+		exit 1
+	fi
+
+	if ip netns exec "$CLIENT_NS" curl \
+		--fail --silent \
+		--connect-timeout 1 \
+		--retry 1 \
+		--retry-delay 0 \
+		http://10.10.0.2:8080/ \
 		>"$LOG_DIR/http-response.html"; then
-		break
+	echo "HTTP request succeeded"
+	break
 	fi
 	sleep 0.1
 done
+if [[ ! -s "$LOG_DIR/http-response.html" ]]; then
+	echo "HTTP request did not succeed after waiting for the service:" >&2
+	sed -n '1,120p' "$LOG_DIR/http.log" >&2
+	exit 1
+fi
 run test -s "$LOG_DIR/http-response.html"
 
 stop_crabnet

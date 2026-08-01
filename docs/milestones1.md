@@ -486,3 +486,7 @@ Everything here is about the **data plane**:
 - routing
 
 The **control plane**—authentication, peer discovery, configuration, management APIs, and similar concerns—comes later. Thinking in terms of data plane vs. control plane is a useful mental model that you'll encounter in many networking systems, from VPNs to service meshes and cloud networking platforms. memcite
+# Historical milestone plan
+
+This document records the earlier Milestone 1 plan. See the current testing and
+architecture references in `README.md` and `docs/testing.md`.

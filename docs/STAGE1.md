@@ -442,3 +442,7 @@ Everything else—encryption, handshakes, routing, observability, NAT traversal,
 - **Concurrency keeps the system responsive.**
 
 These concepts are the foundation of modern networking software. Mastering them first makes every later stage—from encryption to distributed networking—much easier to understand.
+# Historical learning notes
+
+This document is retained for background. See the current implementation
+references in `README.md` and `docs/architecture.md`.

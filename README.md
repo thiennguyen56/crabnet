@@ -6,6 +6,19 @@ Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
 client split routes through `iproute2`, and server IPv4 forwarding.
 
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Configuration reference](docs/configuration.md)
+- [Testing](docs/testing.md)
+- [Current protocol](docs/protocol.md)
+- [Security limitations](docs/security-limitations.md)
+- [Routing sequence diagrams](docs/routing-sequences.md)
+
+`docs/STAGE1.md`, `docs/STAGE1_MINOBOOK.md`, and `docs/milestones1.md` are
+learning notes and historical planning documents; the files above describe the
+current implementation.
+
 ## Why Crabnet?
 
 Networking software is difficult to understand when protocols, routing, NAT,

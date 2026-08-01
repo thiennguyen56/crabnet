@@ -364,3 +364,7 @@ By the end of Stage 1, I should be able to explain—not just implement—the fo
 If I can answer these questions confidently without looking them up, I have built the conceptual foundation needed for Stage 2.
 
 The code comes next. The understanding comes first.
+# Historical learning notes
+
+This document is retained for background. See the current implementation
+references in `README.md` and `docs/architecture.md`.
