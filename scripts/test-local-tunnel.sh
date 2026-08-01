@@ -212,9 +212,15 @@ run ip -n "$CLIENT_NS" route show
 run ip -n "$SERVER_NS" route show
 
 CURRENT_STAGE="checking automatic routes and forwarding"
-client_route="$(ip -n "$CLIENT_NS" route show exact 10.10.0.0/24)"
-if [[ "$client_route" != *"dev crabnet0"* ]]; then
-	echo "Protected client route was not installed: $client_route" >&2
+endpoint_route="$(ip -n "$CLIENT_NS" route show exact 192.0.2.2/32)"
+if [[ "$endpoint_route" != *"dev $CLIENT_VETH"* ]]; then
+	echo "VPN endpoint route was not installed: $endpoint_route" >&2
+	exit 1
+fi
+
+default_route="$(ip -n "$CLIENT_NS" route show default)"
+if [[ "$default_route" != *"dev crabnet0"* ]]; then
+	echo "Full-tunnel default route was not installed: $default_route" >&2
 	exit 1
 fi
 
@@ -259,8 +265,8 @@ for _ in {1..20}; do
 		--retry-delay 0 \
 		http://10.10.0.2:8080/ \
 		>"$LOG_DIR/http-response.html"; then
-	echo "HTTP request succeeded"
-	break
+		echo "HTTP request succeeded"
+		break
 	fi
 	sleep 0.1
 done
@@ -274,8 +280,12 @@ run test -s "$LOG_DIR/http-response.html"
 stop_crabnet
 
 CURRENT_STAGE="checking shutdown state"
-if [[ -n "$(ip -n "$CLIENT_NS" route show exact 10.10.0.0/24)" ]]; then
-	echo "Protected route remains after client shutdown" >&2
+if [[ -n "$(ip -n "$CLIENT_NS" route show exact 192.0.2.2/32)" ]]; then
+	echo "VPN endpoint route remains after client shutdown" >&2
+	exit 1
+fi
+if [[ -n "$(ip -n "$CLIENT_NS" route show default)" ]]; then
+	echo "Full-tunnel default route remains after client shutdown" >&2
 	exit 1
 fi
 if [[ -n "$(ip -n "$SERVER_NS" route show exact 10.10.0.0/24)" ]]; then
@@ -299,7 +309,10 @@ fi
 CURRENT_STAGE="checking shutdown summaries"
 run grep -F "Client forwarding summary" "$LOG_DIR/client.log"
 run grep -F "Server forwarding summary" "$LOG_DIR/server.log"
-run grep -F "Removed route 10.10.0.0/24 dev crabnet0" "$LOG_DIR/client.log"
+run grep -F "Installed route 192.0.2.2/32 dev $CLIENT_VETH" "$LOG_DIR/client.log"
+run grep -F "Installed route 0.0.0.0/0 dev crabnet0" "$LOG_DIR/client.log"
+run grep -F "Removed route 0.0.0.0/0 dev crabnet0" "$LOG_DIR/client.log"
+run grep -F "Removed route 192.0.2.2/32 dev $CLIENT_VETH" "$LOG_DIR/client.log"
 run grep -F "Installed route 10.10.0.0/24 via 172.16.0.2" "$LOG_DIR/server.log"
 run grep -F "Removed route 10.10.0.0/24 via 172.16.0.2" "$LOG_DIR/server.log"
 if [[ "$INITIAL_FORWARDING" == "0" ]]; then
@@ -312,4 +325,4 @@ if [[ -n "$HTTP_PID" ]] && kill -0 "$HTTP_PID" 2>/dev/null; then
 fi
 HTTP_PID=""
 
-echo "PASS: underlay, routed server route, overlay, backend HTTP, and cleanup succeeded."
+echo "PASS: full tunnel, underlay exclusion, routed service, HTTP, and cleanup succeeded."

@@ -3,7 +3,8 @@ use anyhow::Context;
 use crate::client::{Client, ClientConfig};
 use crate::config::{Config, ModeConfig};
 use crate::routing::{
-  client_operations, server_operations, LinuxRouteBackend, RouteManager, TokioCommandRunner,
+  full_tunnel_operations, server_operations, split_tunnel_operations, LinuxRouteBackend,
+  RouteManager, TokioCommandRunner,
 };
 use crate::server::{Server, ServerConfig};
 
@@ -31,16 +32,14 @@ impl Application {
       routing,
     } = config;
 
-    if matches!(&mode, ModeConfig::Server { .. }) && routing.enable_nat {
-      log::warn!("Server NAT configuration is validated but not applied yet");
-    }
-
     match mode {
       ModeConfig::Client {
         bind_addr,
         server_addr,
       } => {
         let tun_name = tun.name.clone();
+        let tun_address = tun.address;
+
         let config = ClientConfig {
           bind_addr,
           server_addr,
@@ -48,9 +47,17 @@ impl Application {
         };
         let client = Client::bind(config).await?;
 
-        let operations = client_operations(&routing, &tun_name);
+        let mut backend = LinuxRouteBackend::new(TokioCommandRunner);
 
-        let backend = LinuxRouteBackend::new(TokioCommandRunner);
+        let operations = if routing.full_tunnel {
+          let underlay = backend
+            .resolve_underlay_route(server_addr.ip())
+            .await
+            .context("failed to resolve VPN server underlay route")?;
+          full_tunnel_operations(&tun_name, tun_address, server_addr.ip(), &underlay)?
+        } else {
+          split_tunnel_operations(&routing, &tun_name)
+        };
 
         let mut routes = RouteManager::new(backend);
 

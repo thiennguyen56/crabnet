@@ -19,13 +19,19 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct RoutingConfig {
-  /// Routes installed on the client through the TUN device.
+  /// Client-only split-tunnel destinations.
   pub protected_routes: Vec<IpNet>,
 
-  /// Routes installed on the server toward backend networks.
+  /// Server-only routes toward private networks.
   pub server_routes: Vec<StaticRoute>,
 
+  /// Client-only default routing through TUN.
+  pub full_tunnel: bool,
+
+  /// Server-only IPv4 forwarding.
   pub enable_forwarding: bool,
+
+  /// Reserved for a later NAT milestone.
   pub enable_nat: bool,
 }
 
@@ -68,6 +74,13 @@ pub struct StaticRoute {
 
   #[serde(default)]
   pub interface: Option<String>,
+}
+
+/// Current operating-system route to the Crabnet server endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnderlayRoute {
+  pub gateway: Option<IpAddr>,
+  pub interface: String,
 }
 
 pub(crate) trait RouteBackend {
@@ -138,7 +151,10 @@ where
   }
 }
 
-pub(crate) fn client_operations(config: &RoutingConfig, tun_name: &str) -> Vec<RouteOperation> {
+pub(crate) fn split_tunnel_operations(
+  config: &RoutingConfig,
+  tun_name: &str,
+) -> Vec<RouteOperation> {
   config
     .protected_routes
     .iter()
@@ -166,6 +182,36 @@ pub(crate) fn server_operations(config: &RoutingConfig) -> Vec<RouteOperation> {
     operations.push(RouteOperation::SetIpv4Forwarding { enabled: true });
   }
   operations
+}
+
+pub(crate) fn full_tunnel_operations(
+  tun_name: &str,
+  tun_address: IpAddr,
+  server_address: IpAddr,
+  underlay: &UnderlayRoute,
+) -> anyhow::Result<Vec<RouteOperation>> {
+  let endpoint_prefix = if server_address.is_ipv4() { 32 } else { 128 };
+
+  let default_route = if tun_address.is_ipv4() {
+    "0.0.0.0/0".parse()?
+  } else {
+    "::/0".parse()?
+  };
+
+  Ok(vec![
+    RouteOperation::AddRoute {
+      // Keep Crabnet's UDP transport outside the TUN default route.
+      destination: IpNet::new(server_address, endpoint_prefix)?,
+      gateway: underlay.gateway,
+      interface: Some(underlay.interface.clone()),
+    },
+    RouteOperation::AddRoute {
+      // Send every other destination through TUN.
+      destination: default_route,
+      gateway: None,
+      interface: Some(tun_name.to_owned()),
+    },
+  ])
 }
 
 #[cfg(test)]
@@ -290,7 +336,7 @@ mod tests {
   }
 
   #[test]
-  fn client_routes_are_translated_in_order() {
+  fn split_tunnel_routes_are_translated_in_order() {
     let config = RoutingConfig {
       protected_routes: vec![
         "172.16.0.0/24".parse().unwrap(),
@@ -299,7 +345,7 @@ mod tests {
       ..RoutingConfig::default()
     };
     assert_eq!(
-      client_operations(&config, "crabnet0"),
+      split_tunnel_operations(&config, "crabnet0"),
       vec![
         route("172.16.0.0/24", "crabnet0"),
         route("172.17.0.0/24", "crabnet0"),
@@ -309,7 +355,7 @@ mod tests {
 
   #[test]
   fn empty_client_routes_produce_no_operations() {
-    assert!(client_operations(&RoutingConfig::default(), "crabnet0").is_empty());
+    assert!(split_tunnel_operations(&RoutingConfig::default(), "crabnet0").is_empty());
   }
 
   #[tokio::test]
@@ -487,5 +533,115 @@ mod tests {
 
     manager.restore().await.unwrap();
     assert!(!manager.backend().ipv4_forwarding);
+  }
+
+  #[test]
+  fn full_tunnel_installs_endpoint_before_default() {
+    let underlay = UnderlayRoute {
+      gateway: None,
+      interface: "cn-client-veth".to_owned(),
+    };
+
+    assert_eq!(
+      full_tunnel_operations(
+        "crabnet0",
+        "10.0.0.2".parse().unwrap(),
+        "192.0.2.2".parse().unwrap(),
+        &underlay,
+      )
+      .unwrap(),
+      vec![
+        RouteOperation::AddRoute {
+          destination: "192.0.2.2/32".parse().unwrap(),
+          gateway: None,
+          interface: Some("cn-client-veth".to_owned(),),
+        },
+        RouteOperation::AddRoute {
+          destination: "0.0.0.0/0".parse().unwrap(),
+          gateway: None,
+          interface: Some("crabnet0".to_owned(),),
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn full_tunnel_preserves_underlay_gateway() {
+    let underlay = UnderlayRoute {
+      gateway: Some("192.168.1.1".parse().unwrap()),
+      interface: "eth0".to_owned(),
+    };
+
+    let operations = full_tunnel_operations(
+      "crabnet0",
+      "10.0.0.2".parse().unwrap(),
+      "203.0.113.10".parse().unwrap(),
+      &underlay,
+    )
+    .unwrap();
+
+    assert_eq!(
+      operations[0],
+      RouteOperation::AddRoute {
+        destination: "203.0.113.10/32".parse().unwrap(),
+        gateway: Some("192.168.1.1".parse().unwrap()),
+        interface: Some("eth0".to_owned()),
+      }
+    );
+  }
+
+  #[test]
+  fn full_tunnel_supports_ipv6_routes() {
+    let underlay = UnderlayRoute {
+      gateway: None,
+      interface: "eth0".to_owned(),
+    };
+
+    assert_eq!(
+      full_tunnel_operations(
+        "crabnet0",
+        "fd00::2".parse().unwrap(),
+        "2001:db8::1".parse().unwrap(),
+        &underlay,
+      )
+      .unwrap(),
+      vec![
+        RouteOperation::AddRoute {
+          destination: "2001:db8::1/128".parse().unwrap(),
+          gateway: None,
+          interface: Some("eth0".to_owned()),
+        },
+        RouteOperation::AddRoute {
+          destination: "::/0".parse().unwrap(),
+          gateway: None,
+          interface: Some("crabnet0".to_owned()),
+        },
+      ]
+    );
+  }
+
+  #[tokio::test]
+  async fn full_tunnel_default_failure_rolls_back_endpoint_route() {
+    let underlay = UnderlayRoute {
+      gateway: None,
+      interface: "cn-client-veth".to_owned(),
+    };
+    let operations = full_tunnel_operations(
+      "crabnet0",
+      "10.0.0.2".parse().unwrap(),
+      "192.0.2.2".parse().unwrap(),
+      &underlay,
+    )
+    .unwrap();
+    let backend = FakeRouteBackend {
+      fail_apply_at: Some(1),
+      ..FakeRouteBackend::default()
+    };
+    let mut manager = RouteManager::new(backend);
+
+    manager.install(&operations).await.unwrap_err();
+
+    assert!(manager.applied().is_empty());
+    assert!(manager.backend().existing.is_empty());
   }
 }

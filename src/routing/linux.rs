@@ -5,7 +5,7 @@ use ipnet::IpNet;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use super::manager::{AppliedOperation, ApplyOutcome, RouteBackend, RouteOperation};
+use super::manager::{AppliedOperation, ApplyOutcome, RouteBackend, RouteOperation, UnderlayRoute};
 
 const IPV4_FORWARDING_KEY: &str = "net.ipv4.ip_forward";
 
@@ -15,6 +15,12 @@ pub(crate) struct CommandResult {
   exit_code: Option<i32>,
   stdout: String,
   stderr: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IpRouteLookup {
+  gateway: Option<String>,
+  dev: Option<String>,
 }
 
 pub(crate) trait CommandRunner {
@@ -198,6 +204,23 @@ where
 
     Ok(())
   }
+
+  pub(crate) async fn resolve_underlay_route(
+    &mut self,
+    destination: IpAddr,
+  ) -> anyhow::Result<UnderlayRoute> {
+    let result = run_checked(
+      &mut self.runner,
+      "ip",
+      &route_get_args(destination),
+      &format!("failed to resolve underlay route for {destination}"),
+    )
+    .await?;
+
+    parse_underlay_route(&result.stdout, destination).with_context(|| {
+      format!("failed to parse underlay route for {destination} from `ip route get` output")
+    })
+  }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -220,19 +243,18 @@ fn classify_existing_route(
   gateway: Option<IpAddr>,
   interface: Option<&str>,
 ) -> ExistingRoute {
-  let destination = destination.to_string();
   let gateway = gateway.map(|value| value.to_string());
   if routes.is_empty() {
     return ExistingRoute::Missing;
   }
 
   let identical = routes.iter().any(|route| {
-    route.dst.as_deref() == Some(destination.as_str())
+    destination_matches(route.dst.as_deref(), destination)
       && route.gateway == gateway
       && route.dev.as_deref() == interface
   });
   let conflicting = routes.iter().any(|route| {
-    route.dst.as_deref() == Some(destination.as_str())
+    destination_matches(route.dst.as_deref(), destination)
       && !(route.gateway == gateway && route.dev.as_deref() == interface)
   });
 
@@ -330,6 +352,46 @@ where
   .await?;
 
   Ok(())
+}
+
+fn parse_underlay_route(stdout: &str, destination: IpAddr) -> anyhow::Result<UnderlayRoute> {
+  let routes: Vec<IpRouteLookup> =
+    serde_json::from_str(stdout).context("failed to parse JSON returned by `ip -j route get`")?;
+
+  let route = routes
+    .first()
+    .ok_or_else(|| anyhow::anyhow!("no route found to VPN server {destination}"))?;
+
+  let interface = route
+    .dev
+    .clone()
+    .ok_or_else(|| anyhow::anyhow!("route to VPN server {destination} has no output interface"))?;
+
+  let gateway = route
+    .gateway
+    .as_deref()
+    .map(str::parse)
+    .transpose()
+    .context("route to VPN server contains an invalid gateway")?;
+
+  Ok(UnderlayRoute { gateway, interface })
+}
+
+fn destination_matches(actual: Option<&str>, expected: &IpNet) -> bool {
+  match actual {
+    Some("default") => expected.prefix_len() == 0,
+    Some(actual) => actual == expected.to_string(),
+    None => false,
+  }
+}
+
+fn route_get_args(destination: IpAddr) -> Vec<String> {
+  vec![
+    "-j".to_owned(),
+    "route".to_owned(),
+    "get".to_owned(),
+    destination.to_string(),
+  ]
 }
 
 fn route_add_args(
@@ -521,6 +583,108 @@ mod tests {
       route_add_args(&destination, None, Some("crabnet0")),
       ["route", "add", "172.16.0.0/24", "dev", "crabnet0"]
     );
+    assert_eq!(
+      route_get_args("192.0.2.2".parse().unwrap()),
+      ["-j", "route", "get", "192.0.2.2"]
+    );
+  }
+
+  #[tokio::test]
+  async fn resolves_directly_connected_underlay_route() {
+    let mut backend = backend(vec![success(
+      r#"[{"dst":"192.0.2.2","dev":"cn-client-veth"}]"#,
+    )]);
+
+    assert_eq!(
+      backend
+        .resolve_underlay_route("192.0.2.2".parse().unwrap())
+        .await
+        .unwrap(),
+      UnderlayRoute {
+        gateway: None,
+        interface: "cn-client-veth".to_owned(),
+      }
+    );
+  }
+
+  #[tokio::test]
+  async fn resolves_gateway_underlay_route() {
+    let mut backend = backend(vec![success(
+      r#"[{"dst":"203.0.113.10","gateway":"192.168.1.1","dev":"eth0"}]"#,
+    )]);
+
+    assert_eq!(
+      backend
+        .resolve_underlay_route("203.0.113.10".parse().unwrap())
+        .await
+        .unwrap(),
+      UnderlayRoute {
+        gateway: Some("192.168.1.1".parse().unwrap()),
+        interface: "eth0".to_owned(),
+      }
+    );
+  }
+
+  #[tokio::test]
+  async fn rejects_invalid_underlay_route_output() {
+    for (json, expected) in [
+      ("[]", "no route found"),
+      (r#"[{"dst":"192.0.2.2"}]"#, "no output interface"),
+      (
+        r#"[{"dst":"192.0.2.2","gateway":"invalid","dev":"eth0"}]"#,
+        "invalid gateway",
+      ),
+    ] {
+      let mut backend = backend(vec![success(json)]);
+      let error = backend
+        .resolve_underlay_route("192.0.2.2".parse().unwrap())
+        .await
+        .unwrap_err();
+      assert!(format!("{error:#}").contains(expected));
+    }
+  }
+
+  #[tokio::test]
+  async fn underlay_command_failure_is_propagated() {
+    let mut backend = backend(vec![failure("permission denied")]);
+    let error = backend
+      .resolve_underlay_route("192.0.2.2".parse().unwrap())
+      .await
+      .unwrap_err();
+
+    assert!(format!("{error:#}").contains("permission denied"));
+  }
+
+  #[test]
+  fn default_keyword_matches_default_network() {
+    assert!(destination_matches(
+      Some("default"),
+      &"0.0.0.0/0".parse().unwrap()
+    ));
+    assert!(destination_matches(
+      Some("default"),
+      &"::/0".parse().unwrap()
+    ));
+    assert!(!destination_matches(
+      Some("default"),
+      &"10.0.0.0/24".parse().unwrap()
+    ));
+  }
+
+  #[tokio::test]
+  async fn conflicting_existing_default_route_is_rejected() {
+    let operation = RouteOperation::AddRoute {
+      destination: "0.0.0.0/0".parse().unwrap(),
+      gateway: None,
+      interface: Some("crabnet0".to_owned()),
+    };
+    let mut backend = backend(vec![success(
+      r#"[{"dst":"default","gateway":"192.0.2.1","dev":"eth0"}]"#,
+    )]);
+
+    let error = backend.apply(&operation).await.unwrap_err();
+
+    assert!(error.to_string().contains("conflicting route"));
   }
 
   #[tokio::test]

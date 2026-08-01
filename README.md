@@ -4,7 +4,7 @@
 
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
-client split routes through `iproute2`, and server IPv4 forwarding.
+client split/full-tunnel routes through `iproute2`, and server IPv4 forwarding.
 
 ## Documentation
 
@@ -42,7 +42,7 @@ It verifies, in order:
 ```text
 underlay connectivity
 → TUN creation
-→ client protected-route installation
+→ client endpoint-exclusion and default-route installation
 → server_routes installation
 → server IPv4 forwarding
 → overlay ping
@@ -52,9 +52,8 @@ underlay connectivity
 
 The test requires Linux, `sudo`, `iproute2`, `sysctl`, `ping`, `curl`, and
 Python. TUN, namespace, route, and forwarding operations require root or
-`CAP_NET_ADMIN`. Do not test `google.com` yet; full-internet tunneling also
-needs default-route management, firewall rules, NAT, DNS, and return-path
-automation.
+`CAP_NET_ADMIN`. Do not test `google.com` yet; full-internet tunneling still
+needs firewall rules, NAT, DNS, and return-path automation.
 
 ### 1. Build and check
 
@@ -75,7 +74,7 @@ The client configuration must contain:
 
 ```toml
 [routing]
-protected_routes = ["10.10.0.0/24"]
+full_tunnel = true
 ```
 
 The server configuration must contain:
@@ -89,10 +88,16 @@ enable_forwarding = true
 enable_nat = false
 ```
 
-The client route sends `10.10.0.0/24` into `crabnet0`. The server route sends
-that destination through the backend router at `172.16.0.2`. The server
-forwarding setting enables `net.ipv4.ip_forward`; NAT is deliberately not
-implemented.
+The client installs a `/32` underlay route for the VPN server, then a default
+route through `crabnet0`. The server route sends `10.10.0.0/24` through the
+backend router at `172.16.0.2`. The server forwarding setting enables
+`net.ipv4.ip_forward`; NAT is deliberately not implemented.
+
+Crabnet resolves the server's underlay gateway and interface before installing
+the default route. This ordering prevents the VPN's own UDP transport from
+being selected by the TUN default route. The current implementation refuses to
+replace an existing default route, so this full-tunnel procedure is limited to
+the isolated client namespace used below.
 
 ### 3. Create the three namespaces and links
 
@@ -168,8 +173,8 @@ through the server.
 
 This route is intentionally still configured manually in the namespace test:
 the backend is outside the Crabnet process, so Crabnet cannot safely change its
-routing table. The application does automate the client protected route and
-server IPv4 forwarding.
+routing table. The application does automate the client's full-tunnel routes
+and server IPv4 forwarding.
 
 ### 5. Verify physical links
 
@@ -234,17 +239,20 @@ Expected forwarding output while the server runs:
 1
 ```
 
-Verify the client-managed protected route:
+Verify the client-managed endpoint exclusion and default route:
 
 ```bash
 sudo ip netns exec cn-client \
-  ip route show exact 10.10.0.0/24
+  ip route show exact 192.0.2.2/32
+sudo ip netns exec cn-client \
+  ip route show default
 ```
 
 Expected output:
 
 ```text
-10.10.0.0/24 dev crabnet0
+192.0.2.2 dev cn-client-veth
+default dev crabnet0
 ```
 
 Verify the server-managed route:
@@ -346,11 +354,12 @@ The first missing observation identifies the failing layer:
 
 ### 12. Shut down and verify restoration
 
-Stop the client with Ctrl+C first. Its log should include removal of the
-protected route:
+Stop the client with Ctrl+C first. Its log should include reverse-order removal
+of the default and endpoint routes:
 
 ```text
-Removed route 10.10.0.0/24 dev crabnet0
+Removed route 0.0.0.0/0 dev crabnet0
+Removed route 192.0.2.2/32 dev cn-client-veth
 ```
 
 Then stop the server with Ctrl+C. Its log should include restoration of IPv4
@@ -395,8 +404,9 @@ firewall.
 ## Repeat the four-namespace test automatically
 
 The script creates the client, server, backend-router, and service namespaces,
-configures `server_routes` and both return routes, verifies routed overlay ping
-and backend HTTP, and checks route/sysctl cleanup:
+configures the client full-tunnel routes, `server_routes`, and both return
+routes, verifies routed overlay ping and backend HTTP, and checks route/sysctl
+cleanup:
 
 ```bash
 cargo build

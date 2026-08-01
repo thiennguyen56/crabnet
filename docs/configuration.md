@@ -43,12 +43,30 @@ an MTU of at least 1280.
 
 ## Routing
 
-Client routes are installed through the TUN interface:
+Split-tunnel client routes are installed through the TUN interface:
 
 ```toml
 [routing]
 protected_routes = ["10.10.0.0/24"]
 ```
+
+Full tunnel is a mutually exclusive client mode:
+
+```toml
+[routing]
+full_tunnel = true
+```
+
+Before changing the default route, Crabnet resolves the operating system's
+current route to the VPN server. It then installs a host route for that server
+through the resolved gateway and interface, followed by a default route through
+TUN. The host route is more specific than the default route, so Crabnet's UDP
+transport stays on the underlay instead of recursively entering its own tunnel.
+
+`protected_routes` must be empty in this mode because the TUN default route
+already covers every destination in the TUN address family. The current route
+backend refuses to replace a pre-existing default route, so use full tunnel only
+in an isolated routing domain without a conflicting default route.
 
 Server routes describe networks reachable through a server-side gateway:
 
@@ -61,5 +79,6 @@ enable_forwarding = true
 enable_nat = false
 ```
 
-`enable_nat` is validated but not applied yet. The backend's return route is
-outside Crabnet's process and must be configured by the environment.
+`enable_nat = true` is rejected because NAT is not implemented. The backend's
+return route is outside Crabnet's process and must be configured by the
+environment.

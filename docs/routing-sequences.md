@@ -1,8 +1,8 @@
 # Routing sequence diagrams
 
 These diagrams show the two intended traffic paths. The private-service path
-is covered by the current four-namespace test. The global path is future work
-because it requires default-route management, NAT, firewall rules, and DNS
+is covered by the current four-namespace full-tunnel test. Global internet
+access is future work because it still requires NAT, firewall rules, and DNS
 handling.
 
 ## Private service routing
@@ -37,6 +37,23 @@ sequenceDiagram
 
 ## Global/full-tunnel routing
 
+Startup resolves and protects the transport path before redirecting the
+client's remaining traffic:
+
+```mermaid
+sequenceDiagram
+    participant C as Client OS
+    participant App as Crabnet
+    participant Tun as crabnet0
+    App->>C: Resolve current route to VPN server
+    C-->>App: Underlay gateway and interface
+    App->>C: Add VPN server /32 or /128 via underlay
+    App->>C: Add 0.0.0.0/0 or ::/0 via Tun
+```
+
+The lookup must precede the TUN default route; otherwise route resolution could
+return `crabnet0` and send the tunnel's own UDP packets back into the tunnel.
+
 ```mermaid
 sequenceDiagram
     participant App as Client application
@@ -65,10 +82,9 @@ sequenceDiagram
     CTun->>App: Application receives response
 ```
 
-The global path additionally requires:
+The client default route and VPN-server endpoint exclusion are implemented for
+the isolated namespace test. The remaining global path requires:
 
-- a client default route through TUN;
-- a protected route for the VPN server's underlay address;
 - server NAT/masquerading;
 - firewall forwarding rules;
 - DNS handling; and

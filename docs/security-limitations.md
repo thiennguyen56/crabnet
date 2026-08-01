@@ -8,7 +8,9 @@ Crabnet is not production-safe at the current milestone.
 - A peer can be selected by sending the first valid datagram.
 - There is no replay protection or key rotation.
 - NAT and firewall automation are not implemented.
-- Full-tunnel DNS and route protection are not implemented.
+- Full tunnel is limited to isolated environments without a conflicting
+  pre-existing default route.
+- Full-tunnel DNS handling is not implemented.
 - TUN and routing operations require elevated Linux privileges.
 
 Use the namespace test for isolated lab validation only. Do not expose the

@@ -167,14 +167,15 @@ impl Config {
     self.tun.validate()?;
 
     ensure!(
-      !self.routing.enable_nat || self.routing.enable_forwarding,
-      "routing.enable_nat requires routing.enable_forwarding"
+      !self.routing.enable_nat,
+      "routing.enable_nat is not implemented yet"
     );
 
     for (index, route) in self.routing.protected_routes.iter().enumerate() {
       ensure!(
         route.prefix_len() != 0,
-        "routing.protected_routes[{index}] is a default route; full tunneling is not supported yet"
+        "routing.protected_routes[{index}] is a default route; \
+         use routing.full_tunnel instead"
       );
       ensure!(
         route.addr().is_ipv4() == self.tun.address.is_ipv4(),
@@ -193,6 +194,19 @@ impl Config {
           "routing.enable_forwarding and routing.enable_nat are server-only options"
         );
 
+        ensure!(
+          self.routing.server_routes.is_empty(),
+          "routing.server_routes is server-only"
+        );
+
+        if self.routing.full_tunnel {
+          ensure!(
+            self.routing.protected_routes.is_empty(),
+            "routing.protected_routes must be empty when \
+             routing.full_tunnel is enabled"
+          );
+        }
+
         if let Some(route) = self
           .routing
           .protected_routes
@@ -208,6 +222,11 @@ impl Config {
         ensure!(
           self.routing.protected_routes.is_empty(),
           "routing.protected_routes is a client-only option"
+        );
+
+        ensure!(
+          !self.routing.full_tunnel,
+          "routing.full_tunnel is a client-only option"
         );
       }
     }
@@ -339,18 +358,18 @@ mod tests {
   }
 
   #[test]
-  fn rejects_full_tunnel_route_for_now() {
+  fn rejects_default_inside_protected_routes() {
     let mut config = Config::default();
     config.routing.protected_routes = vec!["0.0.0.0/0".parse().unwrap()];
 
     let error = config.validate().unwrap_err();
     assert!(error
       .to_string()
-      .contains("full tunneling is not supported"));
+      .contains("use routing.full_tunnel instead"));
   }
 
   #[test]
-  fn rejects_nat_without_forwarding() {
+  fn rejects_nat_while_unimplemented() {
     let mut config = Config {
       mode: ModeConfig::Server {
         bind_addr: "0.0.0.0:51821".parse().unwrap(),
@@ -362,7 +381,7 @@ mod tests {
     let error = config.validate().unwrap_err();
     assert!(error
       .to_string()
-      .contains("requires routing.enable_forwarding"));
+      .contains("routing.enable_nat is not implemented yet"));
   }
 
   #[test]
@@ -377,5 +396,37 @@ mod tests {
 
     let error = config.validate().unwrap_err();
     assert!(error.to_string().contains("client-only"));
+  }
+
+  #[test]
+  fn accepts_client_full_tunnel() {
+    let mut config = Config::default();
+    config.routing.full_tunnel = true;
+
+    config.validate().unwrap();
+  }
+
+  #[test]
+  fn rejects_full_tunnel_with_protected_routes() {
+    let mut config = Config::default();
+    config.routing.full_tunnel = true;
+    config.routing.protected_routes = vec!["10.10.0.0/24".parse().unwrap()];
+
+    let error = config.validate().unwrap_err();
+    assert!(error.to_string().contains("protected_routes must be empty"));
+  }
+
+  #[test]
+  fn rejects_server_full_tunnel() {
+    let mut config = Config {
+      mode: ModeConfig::Server {
+        bind_addr: "0.0.0.0:51821".parse().unwrap(),
+      },
+      ..Config::default()
+    };
+    config.routing.full_tunnel = true;
+
+    let error = config.validate().unwrap_err();
+    assert!(error.to_string().contains("full_tunnel is a client-only"));
   }
 }

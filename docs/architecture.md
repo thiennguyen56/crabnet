@@ -7,6 +7,7 @@ CLI/config
    ↓
 Application::bind
    ├─ Client::bind or Server::bind
+   ├─ full-tunnel client: resolve VPN-server underlay route
    └─ RouteManager::install
            ↓
       iproute2/sysctl
@@ -33,3 +34,10 @@ Shutdown
 
 The server intentionally supports one active UDP peer and has no authentication.
 This is a lab/test boundary, not a security boundary.
+
+For a full-tunnel client, route setup is intentionally ordered. Crabnet resolves
+the VPN server's route before installing any routes, installs a host route for
+that endpoint through the original underlay, and only then installs the TUN
+default route. Rollback occurs in reverse order. Resolving after the default
+route was installed could select the TUN itself and recursively route Crabnet's
+UDP transport.
