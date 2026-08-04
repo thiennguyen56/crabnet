@@ -4,16 +4,23 @@
 //! and then installs owned networking state. Running always attempts restoration
 //! after the forwarding loop stops.
 
+use std::time::Duration;
+
 use anyhow::Context;
 
 use crate::client::{Client, ClientConfig};
 use crate::config::{Config, ModeConfig};
+use crate::firewall::{
+  build_diagnostic_context, log_firewall_report, FirewallDiagnostics, LinuxFirewallInspector,
+  TokioFirewallCommandRunner,
+};
 use crate::nat::{build_nat_spec, LinuxNatBackend, NatManager, TokioNatCommandRunner};
 use crate::routing::{
   full_tunnel_operations, server_operations, split_tunnel_operations, LinuxRouteBackend,
-  RouteManager, TokioCommandRunner,
+  RouteManager, RoutingConfig, TokioCommandRunner,
 };
 use crate::server::{Server, ServerConfig};
+use crate::tun::TunConfig;
 
 type LinuxRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
 type ClientRouteManager = LinuxRouteManager;
@@ -92,6 +99,7 @@ impl Application {
       }
 
       ModeConfig::Server { bind_addr } => {
+        run_server_firewall_diagnostics(&tun, &routing).await;
         let nat_spec = build_nat_spec(&tun, &routing)?;
 
         let config = ServerConfig { bind_addr, tun };
@@ -204,6 +212,36 @@ fn combine_run_and_cleanup(
       "{component} also failed to clean up \
          network state: {cleanup_error:#}"
     ))),
+  }
+}
+
+async fn run_server_firewall_diagnostics(tun: &TunConfig, routing: &RoutingConfig) {
+  let context = match build_diagnostic_context(tun, routing) {
+    Ok(Some(context)) => context,
+    Ok(None) => return,
+    Err(error) => {
+      log::warn!(
+        "firewall diagnostic context could not be built; \
+         Crabnet will continue because diagnostics are advisory: {error:#}"
+      );
+      return;
+    }
+  };
+
+  let inspector = LinuxFirewallInspector::new(TokioFirewallCommandRunner);
+
+  let mut diagnostics = FirewallDiagnostics::new(inspector, Duration::from_secs(2));
+
+  match diagnostics.diagnose(&context).await {
+    Ok(report) => {
+      log_firewall_report(&context, &report);
+    }
+    Err(error) => {
+      log::warn!(
+        "firewall diagnostics failed; \
+         Crabnet will continue because diagnostics are advisory: {error:#}"
+      );
+    }
   }
 }
 

@@ -46,6 +46,7 @@ underlay connectivity
 → server_routes installation
 → server IPv4 forwarding
 → server nftables masquerading
+→ advisory nftables forwarding-policy diagnostic
 → overlay ping
 → HTTP through the backend network
 → translated source-address verification
@@ -57,6 +58,12 @@ The test requires Linux, `sudo`, `iproute2`, `nftables`, `sysctl`, `ping`,
 require root or `CAP_NET_ADMIN`. Do not claim general internet access yet:
 Crabnet does not manage firewall forwarding policy or full-tunnel DNS, and the
 namespace test exercises a controlled private service rather than the internet.
+
+When server IPv4 forwarding is enabled, startup performs a bounded, read-only
+inspection of IPv4-relevant nftables forward base-chain policies. The result is
+advisory: inspection failures are logged but do not stop startup. Crabnet does
+not evaluate individual rules, legacy iptables, eBPF filters, or other firewall
+systems, and it never installs administrator firewall policy.
 
 ### 1. Build and check
 

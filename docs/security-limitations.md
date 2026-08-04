@@ -8,6 +8,10 @@ Crabnet is not production-safe at the current milestone.
 - A peer can be selected by sending the first valid datagram.
 - There is no replay protection or key rotation.
 - IPv4 masquerading is implemented, but firewall-policy automation is not.
+- Startup firewall diagnostics inspect only IPv4-relevant nftables forward
+  base-chain declarations. They do not evaluate individual rules, legacy
+  iptables, eBPF filters, or other firewall systems, and a successful diagnostic
+  does not prove that traffic will be allowed.
 - NAT supports one explicitly configured egress interface and one Crabnet-owned
   nftables table per network namespace.
 - Full tunnel is limited to isolated environments without a conflicting

@@ -8,6 +8,7 @@
 mod application;
 mod client;
 mod config;
+mod firewall;
 mod nat;
 mod routing;
 mod server;

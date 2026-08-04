@@ -342,6 +342,7 @@ fi
 CURRENT_STAGE="checking shutdown summaries"
 run grep -F "Client forwarding summary" "$LOG_DIR/client.log"
 run grep -F "Server forwarding summary" "$LOG_DIR/server.log"
+run grep -F "no nftables IPv4 forward base chain was observed" "$LOG_DIR/server.log"
 run grep -F "Installed route 192.0.2.2/32 dev $CLIENT_VETH" "$LOG_DIR/client.log"
 run grep -F "Installed route 0.0.0.0/0 dev crabnet0" "$LOG_DIR/client.log"
 run grep -F "Removed route 0.0.0.0/0 dev crabnet0" "$LOG_DIR/client.log"
