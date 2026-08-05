@@ -15,6 +15,11 @@ cover chain filtering, policy assessment, malformed JSON, inspection failure,
 timeout behavior, context construction, and the exact read-only nft command;
 they do not require root or inspect the host firewall.
 
+Protocol unit tests cover the exact version 1 wire layout, binary round trips,
+MTU boundaries, undersized output buffers, malformed headers, unsupported
+fields, and declared-length mismatches. Server state tests prove that only a
+valid decoded frame can register the first peer.
+
 ## Privileged routed test
 
 The repeatable test creates `cn-client`, `cn-server`, `cn-backend`, and
@@ -26,12 +31,19 @@ cargo build
 sudo scripts/test-local-tunnel.sh
 ```
 
-It verifies underlay connectivity, TUN creation, the client endpoint exclusion
-and TUN default route, `server_routes`, IPv4 forwarding, nftables masquerading,
-the advisory firewall diagnostic, overlay ping, translated HTTP, and cleanup.
+It first sends a malformed UDP datagram before the legitimate client starts and
+proves that the server drops it without registering a peer. It then verifies
+version 1 framing in both directions through debug-log assertions, underlay
+connectivity, TUN creation, the client endpoint exclusion and TUN default
+route, `server_routes`, IPv4 forwarding, nftables masquerading, the advisory
+firewall diagnostic, overlay ping, translated HTTP, and cleanup.
 The backend and service deliberately have no route to the VPN subnet; the
 service observes `172.16.0.1` rather than `10.0.0.2`, which proves source
 translation.
+
+Successful traffic proves that both Crabnet endpoints agree on the current
+frame format. It does not test authentication, encryption, or replay
+protection.
 
 The default route and NAT table exist only inside their test namespaces. The
 script never changes the host default route, forwarding state, or firewall.

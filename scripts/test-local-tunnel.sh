@@ -184,7 +184,7 @@ if [[ "$INITIAL_FORWARDING" != "0" && "$INITIAL_FORWARDING" != "1" ]]; then
 fi
 echo "Initial server IPv4 forwarding: $INITIAL_FORWARDING"
 
-CURRENT_STAGE="starting Crabnet endpoints"
+CURRENT_STAGE="starting Crabnet server"
 echo "+ ip netns exec $SERVER_NS target/debug/crabnet --config-path config/server/config.toml"
 ip netns exec "$SERVER_NS" \
 	"$REPO_ROOT/target/debug/crabnet" \
@@ -192,6 +192,36 @@ ip netns exec "$SERVER_NS" \
 	>"$LOG_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 
+CURRENT_STAGE="waiting for Crabnet server"
+SERVER_READY=0
+for _ in {1..50}; do
+	if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+		echo "Crabnet server exited during startup:" >&2
+		sed -n '1,160p' "$LOG_DIR/server.log" >&2
+		exit 1
+	fi
+
+	if ip -n "$SERVER_NS" link show crabnet0 >/dev/null 2>&1 && \
+		grep -Fq "UDP server listening on 192.0.2.2:51821" "$LOG_DIR/server.log"; then
+		SERVER_READY=1
+		break
+	fi
+	sleep 0.1
+done
+if (( ! SERVER_READY )); then
+	echo "Crabnet server did not become ready:" >&2
+	sed -n '1,160p' "$LOG_DIR/server.log" >&2
+	exit 1
+fi
+
+# An invalid first datagram must be rejected before peer registration. The
+# legitimate client below uses source port 51820; this probe uses an ephemeral
+# source port so an incorrect registration would make the tunnel test fail.
+CURRENT_STAGE="rejecting malformed first frame"
+run ip netns exec "$CLIENT_NS" python3 -c \
+	'import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.bind(("192.0.2.1", 0)); sock.sendto(b"not-a-crabnet-frame", ("192.0.2.2", 51821))'
+
+CURRENT_STAGE="starting Crabnet client"
 echo "+ ip netns exec $CLIENT_NS target/debug/crabnet --config-path config/client/config.toml"
 ip netns exec "$CLIENT_NS" \
 	"$REPO_ROOT/target/debug/crabnet" \
@@ -342,6 +372,18 @@ fi
 CURRENT_STAGE="checking shutdown summaries"
 run grep -F "Client forwarding summary" "$LOG_DIR/client.log"
 run grep -F "Server forwarding summary" "$LOG_DIR/server.log"
+run grep -F "Dropping invalid Crabnet frame from 192.0.2.1:" "$LOG_DIR/server.log"
+run grep -F "Registered active peer 192.0.2.1:51820" "$LOG_DIR/server.log"
+run grep -E "Client TUN -> UDP: sending [0-9]+-byte inner packet as [0-9]+-byte frame" \
+	"$LOG_DIR/client.log"
+run grep -E "Server UDP -> TUN: received [0-9]+-byte frame containing [0-9]+-byte inner packet" \
+	"$LOG_DIR/server.log"
+run grep -E "Server TUN -> UDP: sending [0-9]+-byte inner packet as [0-9]+-byte frame" \
+	"$LOG_DIR/server.log"
+run grep -E "Client UDP -> TUN: received [0-9]+-byte frame containing [0-9]+-byte inner packet" \
+	"$LOG_DIR/client.log"
+run grep -F "invalid frames=0" "$LOG_DIR/client.log"
+run grep -F "invalid frames=1" "$LOG_DIR/server.log"
 run grep -F "no nftables IPv4 forward base chain was observed" "$LOG_DIR/server.log"
 run grep -F "Installed route 192.0.2.2/32 dev $CLIENT_VETH" "$LOG_DIR/client.log"
 run grep -F "Installed route 0.0.0.0/0 dev crabnet0" "$LOG_DIR/client.log"
@@ -361,4 +403,4 @@ if [[ -n "$HTTP_PID" ]] && kill -0 "$HTTP_PID" 2>/dev/null; then
 fi
 HTTP_PID=""
 
-echo "PASS: full tunnel, NAT, routed service, HTTP, and cleanup succeeded."
+echo "PASS: framing, peer admission, full tunnel, NAT, routed HTTP, and cleanup succeeded."

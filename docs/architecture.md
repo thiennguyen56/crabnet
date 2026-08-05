@@ -15,8 +15,8 @@ Application::bind
       └─ RouteManager::install → iproute2/sysctl
 
 Client/Server::run
-   ├─ TUN read → packet validation → UDP send
-   └─ UDP receive → peer/MTU validation → TUN write
+   ├─ TUN read → packet validation → frame encode → UDP send
+   └─ UDP receive → frame/peer validation → frame decode → TUN write
 
 Shutdown
    ├─ Client: RouteManager::restore
@@ -40,7 +40,8 @@ Shutdown
 - `src/nat/linux.rs`: atomic nftables installation, inspection, and cleanup.
 - `src/routing/manager.rs`: route operations, ownership, rollback, and restoration.
 - `src/routing/linux.rs`: `ip` and `sysctl` command backend.
-- `src/protocol.rs`, `src/crypto.rs`, `src/session.rs`: reserved extension points; no wire encryption or handshake is active yet.
+- `src/protocol.rs`: version 1 frame encoding, decoding, and MTU-aware buffer boundaries.
+- `src/crypto.rs` and `src/session.rs`: reserved extension points; no wire encryption or handshake is active yet.
 
 The server intentionally supports one active UDP peer and has no authentication.
 This is a lab/test boundary, not a security boundary.

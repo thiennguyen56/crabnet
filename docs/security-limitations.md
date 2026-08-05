@@ -5,7 +5,7 @@ Crabnet is not production-safe at the current milestone.
 - UDP traffic is unauthenticated.
 - Inner packets are not encrypted.
 - The server has one active peer and no identity verification.
-- A peer can be selected by sending the first valid datagram.
+- A peer can be selected by sending the first valid version 1 frame.
 - There is no replay protection or key rotation.
 - IPv4 masquerading is implemented, but firewall-policy automation is not.
 - Startup firewall diagnostics inspect only IPv4-relevant nftables forward

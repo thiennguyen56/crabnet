@@ -10,6 +10,7 @@ mod client;
 mod config;
 mod firewall;
 mod nat;
+mod protocol;
 mod routing;
 mod server;
 mod tun;

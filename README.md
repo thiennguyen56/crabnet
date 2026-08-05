@@ -4,7 +4,8 @@
 
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
-client split/full-tunnel routes, server IPv4 forwarding, and IPv4 masquerading.
+versioned packet framing, client split/full-tunnel routes, server IPv4
+forwarding, and IPv4 masquerading.
 
 ## Documentation
 
@@ -42,6 +43,8 @@ It verifies, in order:
 ```text
 underlay connectivity
 → TUN creation
+→ malformed-first-frame rejection without peer registration
+→ version 1 encoding and decoding in both directions
 → client endpoint-exclusion and default-route installation
 → server_routes installation
 → server IPv4 forwarding
@@ -452,7 +455,11 @@ firewall.
 The script creates the client, server, backend-router, and service namespaces,
 configures the client full-tunnel routes, server routing, forwarding, and NAT,
 verifies the translated HTTP source without VPN return routes, and checks
-route, sysctl, and nftables cleanup:
+route, sysctl, and nftables cleanup. Before starting the legitimate client, it
+sends one malformed UDP datagram to the server from an ephemeral source port.
+The server must count and drop that datagram without registering its sender;
+the configured client at `192.0.2.1:51820` must subsequently become the active
+peer.
 
 ```bash
 cargo build
@@ -461,4 +468,17 @@ sudo scripts/test-local-tunnel.sh
 
 Build as your normal user so `sudo` does not create root-owned Cargo artifacts.
 The script refuses to reuse existing namespaces, does not change the host
-default route or firewall, and removes only resources it created.
+default route or firewall, and removes only resources it created. It also
+checks debug logs for all four framed packet boundaries:
+
+```text
+client TUN -> version 1 frame -> UDP
+server UDP -> decoded inner packet -> TUN
+server TUN -> version 1 frame -> UDP
+client UDP -> decoded inner packet -> TUN
+```
+
+Together with successful ping and HTTP traffic, these assertions prove that
+both endpoints agree on the current frame format. They do not prove
+authentication, encryption, replay protection, internet DNS handling, or
+compatibility with future protocol versions.

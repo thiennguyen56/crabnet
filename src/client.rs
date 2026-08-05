@@ -1,8 +1,10 @@
 //! Connected Crabnet client and bidirectional packet forwarding.
 //!
-//! Raw packets are copied unchanged between the local TUN and one connected
-//! UDP server. Packet classification remains separate for pure unit testing.
+//! Packets read from TUN are encoded into versioned Crabnet frames before UDP
+//! transmission. Received frames are validated and decoded before their raw
+//! inner payload is written to TUN.
 
+use crate::protocol::{FrameCodec, MessageType};
 use crate::{tun::TunConfig, tun::TunDevice};
 use anyhow::Context;
 use std::net::SocketAddr;
@@ -29,6 +31,7 @@ struct ForwardingStats {
 
   oversized_tun_packets: u64,
   oversized_udp_packets: u64,
+  invalid_udp_frames: u64,
 }
 
 impl ForwardingStats {
@@ -50,13 +53,14 @@ impl ForwardingStats {
       "Client forwarding summary: \
                TUN->UDP={} packets/{} bytes, \
                UDP->TUN={} packets/{} bytes, \
-               oversized TUN={}, oversized UDP={}",
+               oversized TUN={}, oversized UDP={}, invalid frames={}",
       self.tun_to_udp_packets,
       self.tun_to_udp_bytes,
       self.udp_to_tun_packets,
       self.udp_to_tun_bytes,
       self.oversized_tun_packets,
       self.oversized_udp_packets,
+      self.invalid_udp_frames,
     );
   }
 }
@@ -70,22 +74,24 @@ enum PacketDecision {
 
 /// Mutable, unit-testable packet policy and counters for the forwarding loop.
 struct ClientState {
-  mtu: usize,
+  inner_mtu: usize,
+  maximum_frame_len: usize,
   stats: ForwardingStats,
 }
 
 impl ClientState {
-  /// Creates client forwarding state for the specified MTU.
-  fn new(mtu: usize) -> Self {
+  /// Creates client forwarding state for inner and framed packet limits.
+  fn new(inner_mtu: usize, maximum_frame_len: usize) -> Self {
     Self {
-      mtu,
+      inner_mtu,
+      maximum_frame_len,
       stats: ForwardingStats::default(),
     }
   }
 
   /// Classifies a TUN packet and counts an oversized drop.
   fn classify_tun(&mut self, size: usize) -> PacketDecision {
-    if size > self.mtu {
+    if size > self.inner_mtu {
       self.stats.oversized_tun_packets = self.stats.oversized_tun_packets.saturating_add(1);
       PacketDecision::DropOversized
     } else {
@@ -94,8 +100,8 @@ impl ClientState {
   }
 
   /// Classifies a UDP datagram and counts an oversized drop.
-  fn classify_udp(&mut self, size: usize) -> PacketDecision {
-    if size > self.mtu {
+  fn classify_udp_frame(&mut self, size: usize) -> PacketDecision {
+    if size > self.maximum_frame_len {
       self.stats.oversized_udp_packets = self.stats.oversized_udp_packets.saturating_add(1);
       PacketDecision::DropOversized
     } else {
@@ -111,6 +117,11 @@ impl ClientState {
   /// Records a successful UDP-to-TUN transfer.
   fn record_udp_to_tun(&mut self, size: usize) {
     self.stats.record_udp_to_tun(size);
+  }
+
+  /// Records one malformed or unsupported frame received from the server.
+  fn record_invalid_udp_frame(&mut self) {
+    self.stats.invalid_udp_frames = self.stats.invalid_udp_frames.saturating_add(1);
   }
 }
 
@@ -152,23 +163,28 @@ impl Client {
   /// Forwards packets until Ctrl+C or an unrecoverable I/O error, then logs a
   /// summary of forwarded and dropped traffic.
   pub async fn run(&self) -> anyhow::Result<()> {
-    let mut state = ClientState::new(self.tun.mtu());
+    let mtu = self.tun.mtu();
+    let codec = FrameCodec::new(mtu)
+      .with_context(|| format!("failed to configure client framing for TUN MTU {mtu}"))?;
+    let mut state = ClientState::new(mtu, codec.max_datagram_len());
 
-    let result = self.forward(&mut state).await;
+    let result = self.forward(&codec, &mut state).await;
 
     state.stats.log_summary();
     result
   }
 
-  /// Runs the bidirectional forwarding loop with MTU-plus-one receive buffers.
+  /// Runs the bidirectional framed forwarding loop with reusable buffers.
   ///
-  /// The extra byte distinguishes oversized traffic from valid MTU-sized
-  /// packets instead of silently accepting truncation.
-  async fn forward(&self, state: &mut ClientState) -> anyhow::Result<()> {
+  /// The TUN buffer is inner MTU plus one byte. The UDP buffer is frame header
+  /// plus inner MTU plus one byte so oversized input is detected rather than
+  /// accepted after truncation.
+  async fn forward(&self, codec: &FrameCodec, state: &mut ClientState) -> anyhow::Result<()> {
     let mtu = self.tun.mtu();
 
     let mut tun_buffer = vec![0; mtu + 1];
-    let mut udp_buffer = vec![0; mtu + 1];
+    let mut encoded_buffer = vec![0_u8; codec.max_datagram_len()];
+    let mut udp_buffer = vec![0; codec.receive_buffer_len()];
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
@@ -188,19 +204,32 @@ impl Client {
             continue;
           }
 
-          let packet = &tun_buffer[..size];
+          let inner_packet = &tun_buffer[..size];
+          let encoded_size = codec
+            .encode_data(inner_packet, &mut encoded_buffer)
+            .with_context(|| {
+              format!(
+                "failed to encode {size}-byte packet from client TUN {}",
+                self.config.tun.name,
+              )
+            })?;
+          let encoded_packet = &encoded_buffer[..encoded_size];
           log::debug!(
-            "Client TUN -> UDP: sending {size} bytes to {}",
+            "Client TUN -> UDP: sending {}-byte inner packet \
+             as {}-byte frame to {}",
+            size,
+            encoded_size,
             self.config.server_addr,
           );
-          let sent = self.socket.send(packet).await
+          let sent = self.socket.send(encoded_packet).await
           .with_context(|| {
-            format!("failed to send packet to {}", self.config.server_addr)
+            format!("failed to send {encoded_size}-byte frame to {}", self.config.server_addr)
           })?;
 
-          if sent != size {
+          if sent != encoded_size {
             anyhow::bail!(
-              "partial UDP send: sent {sent} of {size} bytes"
+                  "partial UDP send to {}: sent {sent} of {encoded_size} framed bytes",
+                  self.config.server_addr,
             );
           }
           state.record_tun_to_udp(size);
@@ -211,31 +240,47 @@ impl Client {
           let size = result
             .context("failed to receive packet from VPN server")?;
 
-          if state.classify_udp(size) == PacketDecision::DropOversized {
+          if state.classify_udp_frame(size) == PacketDecision::DropOversized {
             log::warn!(
-              "Dropping oversized UDP packet from {}: \
-              {size} bytes, TUN MTU is {mtu}",
+              "Dropping oversized UDP frame from {}: \
+               {size} bytes, maximum frame length is {}",
               self.config.server_addr,
+              codec.max_datagram_len(),
             );
-
             continue;
           }
 
-          let packet = &udp_buffer[..size];
+          let decoded = match codec.decode(&udp_buffer[..size]) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+              state.record_invalid_udp_frame();
+              log::debug!(
+                "Dropping invalid Crabnet frame from {}: {error}",
+                self.config.server_addr,
+              );
+              continue;
+            }
+          };
+
+          let payload = match decoded.message_type() {
+            MessageType::Data => decoded.payload(),
+          };
 
           log::debug!(
-            "Client UDP -> TUN: writing {size} bytes from {}",
+            "Client UDP -> TUN: received {size}-byte frame containing \
+             {}-byte inner packet from {}",
+            payload.len(),
             self.config.server_addr,
           );
 
           self.tun
-            .write_packet(packet)
+            .write_packet(payload)
             .await
             .context(
               "failed to inject server packet into client TUN"
             )?;
 
-          state.record_udp_to_tun(size);
+          state.record_udp_to_tun(payload.len());
         }
 
         result = &mut shutdown => {
@@ -255,20 +300,23 @@ mod tests {
 
   #[test]
   fn packet_equal_to_mtu_is_forwarded() {
-    let mut state = ClientState::new(1400);
+    let mut state = ClientState::new(1400, 1410);
 
     assert_eq!(state.classify_tun(1400), PacketDecision::Forward);
-    assert_eq!(state.classify_udp(1400), PacketDecision::Forward);
+    assert_eq!(state.classify_udp_frame(1410), PacketDecision::Forward);
     assert_eq!(state.stats.oversized_tun_packets, 0);
     assert_eq!(state.stats.oversized_udp_packets, 0);
   }
 
   #[test]
   fn packet_larger_than_mtu_is_dropped_and_counted() {
-    let mut state = ClientState::new(1400);
+    let mut state = ClientState::new(1400, 1410);
 
     assert_eq!(state.classify_tun(1401), PacketDecision::DropOversized);
-    assert_eq!(state.classify_udp(1401), PacketDecision::DropOversized);
+    assert_eq!(
+      state.classify_udp_frame(1411),
+      PacketDecision::DropOversized
+    );
     assert_eq!(state.stats.oversized_tun_packets, 1);
     assert_eq!(state.stats.oversized_udp_packets, 1);
   }
@@ -276,7 +324,7 @@ mod tests {
   #[test]
   fn binary_packet_is_forwarded_unchanged() {
     let packet = [0x00, 0xff, 0x80, 0xc3, 0x28, 0x7f];
-    let mut state = ClientState::new(1400);
+    let mut state = ClientState::new(1400, 1410);
 
     assert_eq!(state.classify_tun(packet.len()), PacketDecision::Forward);
 
@@ -287,7 +335,7 @@ mod tests {
 
   #[test]
   fn successful_forwarding_updates_counters() {
-    let mut state = ClientState::new(1400);
+    let mut state = ClientState::new(1400, 1410);
 
     state.record_tun_to_udp(84);
     state.record_udp_to_tun(128);
@@ -296,5 +344,16 @@ mod tests {
     assert_eq!(state.stats.tun_to_udp_bytes, 84);
     assert_eq!(state.stats.udp_to_tun_packets, 1);
     assert_eq!(state.stats.udp_to_tun_bytes, 128);
+  }
+
+  #[test]
+  fn invalid_frames_are_counted_without_affecting_forwarded_traffic() {
+    let mut state = ClientState::new(1400, 1410);
+
+    state.record_invalid_udp_frame();
+
+    assert_eq!(state.stats.invalid_udp_frames, 1);
+    assert_eq!(state.stats.udp_to_tun_packets, 0);
+    assert_eq!(state.stats.udp_to_tun_bytes, 0);
   }
 }
