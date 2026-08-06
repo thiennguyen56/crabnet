@@ -13,6 +13,8 @@ mod nat;
 mod protocol;
 mod routing;
 mod server;
+#[expect(dead_code)]
+mod session;
 mod tun;
 
 use clap::Parser;
