@@ -13,7 +13,13 @@ mod nat;
 mod protocol;
 mod routing;
 mod server;
-#[expect(dead_code)]
+#[cfg_attr(
+  not(test),
+  expect(
+    dead_code,
+    reason = "milestone 2.2 defines pure session policy before runtime integration"
+  )
+)]
 mod session;
 mod tun;
 

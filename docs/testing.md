@@ -20,6 +20,14 @@ MTU boundaries, undersized output buffers, malformed headers, unsupported
 fields, and declared-length mismatches. Server state tests prove that only a
 valid decoded frame can register the first peer.
 
+Pending-session policy tests cover configuration rejection, duplicate ownership, bounded
+capacity, exact expiration, capacity release, monotonic identifier exhaustion, and idempotent
+shutdown. Pure client-handshake tests cover authenticated-result ordering, per-phase deadlines,
+stale attempts, unexpected sources and messages, pre-session data rejection, authentication
+failure, local error context, establishment, and terminal shutdown. All time is supplied by the
+tests; they do not sleep or require sockets. These policies are not connected to the current
+version 1 runtime and do not prove authentication or encryption.
+
 ## Privileged routed test
 
 The repeatable test creates `cn-client`, `cn-server`, `cn-backend`, and

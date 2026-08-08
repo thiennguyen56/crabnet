@@ -4,13 +4,22 @@
 //! Callers report authentication results as events, and the session manager
 //! returns decisions for the runtime to execute.
 
+pub(crate) mod client;
+
+#[cfg(test)]
+mod manager_tests;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+/// Opaque identifier for one pending authentication attempt.
+///
+/// Candidate IDs are local policy tokens, not authenticated peer identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CandidateId(u64);
 
+/// Validated limits governing pending and established session lifetimes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SessionPolicy {
   maximum_pending: usize,
@@ -19,6 +28,7 @@ pub(crate) struct SessionPolicy {
 }
 
 impl SessionPolicy {
+  /// Constructs a policy after rejecting zero capacity or timeout values.
   pub(crate) fn new(
     maximum_pending: usize,
     handshake_timeout: Duration,
@@ -43,23 +53,30 @@ impl SessionPolicy {
     })
   }
 
+  /// Returns the maximum number of simultaneous unauthenticated candidates.
   pub(crate) const fn maximum_pending(&self) -> usize {
     self.maximum_pending
   }
 
+  /// Returns the maximum lifetime of one pending handshake phase.
   pub(crate) const fn handshake_timeout(&self) -> Duration {
     self.handshake_timeout
   }
 
+  /// Returns the maximum future lifetime of an inactive established session.
   pub(crate) const fn idle_timeout(&self) -> Duration {
     self.idle_timeout
   }
 }
 
+/// Invalid session-policy configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionConfigError {
+  /// No pending handshake could be admitted.
   PendingLimit,
+  /// Pending handshakes would expire immediately.
   HandshakeTimeout,
+  /// Established sessions would expire immediately.
   IdleTimeout,
 }
 
@@ -88,6 +105,9 @@ impl std::fmt::Display for SessionConfigError {
 
 impl std::error::Error for SessionConfigError {}
 
+/// One unauthenticated attempt owned by a transport source.
+///
+/// Duplicate messages retain both the original creation time and deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingCandidate {
   id: CandidateId,
@@ -95,12 +115,17 @@ struct PendingCandidate {
   deadline: Instant,
 }
 
+/// Running or terminal lifecycle of the pending-candidate manager.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagerState {
   Running,
   Closed,
 }
 
+/// Owns bounded pending handshake attempts and their lifecycle policy.
+///
+/// The manager is synchronous and receives time from its caller so admission,
+/// expiration, and shutdown remain deterministic and testable.
 pub(crate) struct SessionManager {
   policy: SessionPolicy,
   state: ManagerState,
@@ -109,6 +134,7 @@ pub(crate) struct SessionManager {
 }
 
 impl SessionManager {
+  /// Creates an empty running manager governed by a validated policy.
   pub(crate) fn new(policy: SessionPolicy) -> Self {
     Self {
       policy,
@@ -118,6 +144,10 @@ impl SessionManager {
     }
   }
 
+  /// Admits a source or reports why no new candidate was created.
+  ///
+  /// Expired candidates are removed before duplicate and capacity checks. A
+  /// duplicate source retains its original identifier and deadline.
   pub(crate) fn admit(
     &mut self,
     source: SocketAddr,
@@ -150,13 +180,13 @@ impl SessionManager {
       });
     }
 
-    let deadline = self.calculate_deadline(now, self.policy.handshake_timeout(), source)?;
+    let deadline = Self::calculate_deadline(now, self.policy.handshake_timeout(), source)?;
 
     let candidate_id = self.reserve_candidate_id()?;
     let candidate = PendingCandidate {
       id: candidate_id,
       created_at: now,
-      deadline: deadline,
+      deadline,
     };
 
     self.pending_by_source.insert(source, candidate);
@@ -170,6 +200,10 @@ impl SessionManager {
     })
   }
 
+  /// Removes candidates whose deadline is at or before `now`.
+  ///
+  /// The report includes removed candidates and the nearest remaining
+  /// deadline. A closed manager has no pending deadlines.
   pub(crate) fn expire_pending(&mut self, now: Instant) -> ExpirationReport {
     if self.state == ManagerState::Closed {
       return ExpirationReport {
@@ -195,11 +229,12 @@ impl SessionManager {
 
     let nearest = self.pending_by_source.values().map(|e| e.deadline).min();
     ExpirationReport {
-      expired: expired,
+      expired,
       next_deadline: nearest,
     }
   }
 
+  /// Returns the nearest pending deadline while the manager is running.
   pub(crate) fn next_deadline(&self) -> Option<Instant> {
     if self.state == ManagerState::Closed {
       return None;
@@ -216,6 +251,9 @@ impl SessionManager {
     self.pending_by_source.len()
   }
 
+  /// Closes the manager and removes every pending candidate.
+  ///
+  /// Repeated shutdown is safe and reports that the manager was already closed.
   pub(crate) fn shutdown(&mut self) -> ShutdownOutcome {
     if self.state == ManagerState::Closed {
       return ShutdownOutcome::AlreadyClosed;
@@ -229,6 +267,7 @@ impl SessionManager {
     }
   }
 
+  /// Reserves the next monotonic candidate ID without wrapping.
   fn reserve_candidate_id(&mut self) -> Result<CandidateId, SessionManagerError> {
     let current = self.next_candidate_id;
 
@@ -241,8 +280,8 @@ impl SessionManager {
     Ok(CandidateId(current))
   }
 
+  /// Calculates one representable deadline for the supplied source.
   fn calculate_deadline(
-    &self,
     now: Instant,
     timeout: Duration,
     source: SocketAddr,
@@ -253,47 +292,72 @@ impl SessionManager {
   }
 }
 
+/// Result of applying admission policy to one transport source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdmissionOutcome {
+  /// A new pending candidate was created.
   Added {
+    /// Identifier reserved for the new attempt.
     candidate_id: CandidateId,
+    /// Instant at which the attempt expires.
     deadline: Instant,
   },
 
+  /// The source already owns an unexpired pending candidate.
   AlreadyPending {
+    /// Existing identifier, which is not replaced.
     candidate_id: CandidateId,
+    /// Original deadline, which is not refreshed.
     deadline: Instant,
   },
 
+  /// The configured pending-candidate bound has been reached.
   AtCapacity {
+    /// Configured bound that prevented admission.
     maximum_pending: usize,
   },
 
+  /// Shutdown has made the manager terminal.
   Closed,
 }
 
+/// Expiration side effects and final decision from one admission attempt.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct AdmissionReport {
+  /// Candidates expired before admission policy was evaluated.
   pub(crate) expired: Vec<ExpiredCandidate>,
+  /// Admission decision for the supplied source.
   pub(crate) outcome: AdmissionOutcome,
 }
 
+/// Public, non-secret description of an expired pending candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExpiredCandidate {
+  /// Identifier of the expired attempt.
   pub(crate) candidate_id: CandidateId,
+  /// Transport address that owned the attempt.
   pub(crate) source: SocketAddr,
 }
 
+/// Result of removing all candidates expired at a supplied instant.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ExpirationReport {
+  /// Candidates removed during this expiration pass.
   pub(crate) expired: Vec<ExpiredCandidate>,
+  /// Nearest deadline among candidates that remain.
   pub(crate) next_deadline: Option<Instant>,
 }
 
+/// Local failure while managing pending candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionManagerError {
-  DeadlineOverflow { source: SocketAddr },
+  /// Adding the configured timeout exceeds the platform instant range.
+  DeadlineOverflow {
+    /// Candidate source whose deadline could not be represented.
+    source: SocketAddr,
+  },
 
+  /// The monotonically increasing candidate identifier cannot advance.
   CandidateIdExhausted,
 }
 
@@ -318,10 +382,16 @@ impl std::fmt::Display for SessionManagerError {
 
 impl std::error::Error for SessionManagerError {}
 
+/// Result of requesting pending-manager shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShutdownOutcome {
-  Closed { removed_candidates: usize },
+  /// The running manager closed and removed its candidates.
+  Closed {
+    /// Number of pending candidates removed.
+    removed_candidates: usize,
+  },
 
+  /// The manager was already closed and no state changed.
   AlreadyClosed,
 }
 

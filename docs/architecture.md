@@ -41,7 +41,13 @@ Shutdown
 - `src/routing/manager.rs`: route operations, ownership, rollback, and restoration.
 - `src/routing/linux.rs`: `ip` and `sysctl` command backend.
 - `src/protocol.rs`: version 1 frame encoding, decoding, and MTU-aware buffer boundaries.
-- `src/crypto.rs` and `src/session.rs`: reserved extension points; no wire encryption or handshake is active yet.
+- `src/session.rs`: bounded pending-handshake ownership, capacity, expiration, and shutdown policy.
+- `src/session/client.rs`: pure client handshake states, authenticated-result transitions,
+  per-phase deadlines, pre-session data decisions, and terminal shutdown.
+- `src/crypto.rs`: reserved extension point for a future reviewed cryptographic protocol.
+
+The pure session policies are not connected to UDP forwarding yet. Version 1 remains the only
+active wire protocol, so no authentication, encryption, or secure handshake is active at runtime.
 
 The server intentionally supports one active UDP peer and has no authentication.
 This is a lab/test boundary, not a security boundary.
