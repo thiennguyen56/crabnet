@@ -5,9 +5,8 @@
 //! returns decisions for the runtime to execute.
 
 pub(crate) mod client;
-
-#[cfg(test)]
-mod manager_tests;
+pub(crate) mod server;
+pub(crate) mod types;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -119,6 +118,24 @@ struct PendingCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagerState {
   Running,
+  Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingCandidateSnapshot {
+  pub(crate) candidate_id: CandidateId,
+  pub(crate) created_at: Instant,
+  pub(crate) deadline: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CandidateRemoval {
+  Removed,
+  NotFound,
+  CandidateMismatch {
+    expected: CandidateId,
+    observed: CandidateId,
+  },
   Closed,
 }
 
@@ -268,6 +285,7 @@ impl SessionManager {
   }
 
   /// Reserves the next monotonic candidate ID without wrapping.
+  /// Reserves the next candidate identifier without wrapping.
   fn reserve_candidate_id(&mut self) -> Result<CandidateId, SessionManagerError> {
     let current = self.next_candidate_id;
 
@@ -281,6 +299,7 @@ impl SessionManager {
   }
 
   /// Calculates one representable deadline for the supplied source.
+  /// Computes a deadline and reports overflow with the candidate source.
   fn calculate_deadline(
     now: Instant,
     timeout: Duration,
@@ -289,6 +308,49 @@ impl SessionManager {
     now
       .checked_add(timeout)
       .ok_or(SessionManagerError::DeadlineOverflow { source })
+  }
+
+  /// Returns an immutable snapshot for the source without expiring or mutating it.
+  pub(crate) fn candidate(&self, source: SocketAddr) -> Option<PendingCandidateSnapshot> {
+    if self.state == ManagerState::Closed {
+      return None;
+    }
+
+    let Some(record) = self.pending_by_source.get(&source) else {
+      return None;
+    };
+
+    Some(PendingCandidateSnapshot {
+      candidate_id: record.id,
+      created_at: record.created_at,
+      deadline: record.deadline,
+    })
+  }
+
+  /// Removes the candidate only when both its source and identifier match.
+  ///
+  /// Returns `Closed` for a terminal manager and leaves all other mismatch
+  /// outcomes unchanged.
+  pub(crate) fn remove_candidate(
+    &mut self,
+    source: SocketAddr,
+    observed: CandidateId,
+  ) -> CandidateRemoval {
+    if self.state == ManagerState::Closed {
+      return CandidateRemoval::Closed;
+    }
+    let Some(record) = self.pending_by_source.get(&source) else {
+      return CandidateRemoval::NotFound;
+    };
+
+    if record.id != observed {
+      return CandidateRemoval::CandidateMismatch {
+        expected: record.id,
+        observed,
+      };
+    }
+    self.pending_by_source.remove(&source);
+    CandidateRemoval::Removed
   }
 }
 
@@ -452,5 +514,105 @@ mod tests {
     assert_eq!(duplicate_id, first_id);
     assert_eq!(duplicate_deadline, first_deadline);
     assert_eq!(manager.pending_count(), 1);
+  }
+}
+
+#[cfg(test)]
+mod extension_tests {
+  use super::*;
+
+  fn policy() -> SessionPolicy {
+    SessionPolicy::new(2, Duration::from_secs(10), Duration::from_secs(60)).unwrap()
+  }
+
+  fn source(port: u16) -> SocketAddr {
+    SocketAddr::from(([192, 0, 2, 1], port))
+  }
+
+  #[test]
+  fn manager_reports_candidate_id_exhaustion_and_deadline_overflow() {
+    let mut manager = SessionManager::new(policy());
+    manager.next_candidate_id = u64::MAX;
+    assert_eq!(
+      manager.admit(source(4000), Instant::now()),
+      Err(SessionManagerError::CandidateIdExhausted)
+    );
+
+    let overflow_policy = SessionPolicy {
+      maximum_pending: 1,
+      handshake_timeout: Duration::MAX,
+      idle_timeout: Duration::from_secs(60),
+    };
+    let mut manager = SessionManager::new(overflow_policy);
+    assert!(matches!(
+      manager.admit(source(4001), Instant::now()),
+      Err(SessionManagerError::DeadlineOverflow { .. })
+    ));
+  }
+
+  #[test]
+  fn snapshot_preserves_candidate_fields() {
+    let mut manager = SessionManager::new(policy());
+    let start = Instant::now();
+    let peer = source(4000);
+    let report = manager.admit(peer, start).unwrap();
+    let (candidate_id, deadline) = match report.outcome {
+      AdmissionOutcome::Added {
+        candidate_id,
+        deadline,
+      } => (candidate_id, deadline),
+      _ => panic!("expected candidate admission"),
+    };
+
+    assert_eq!(
+      manager.candidate(peer),
+      Some(PendingCandidateSnapshot {
+        candidate_id,
+        created_at: start,
+        deadline
+      })
+    );
+    assert_eq!(manager.candidate(source(4001)), None);
+  }
+
+  #[test]
+  fn removal_requires_exact_id_and_closed_manager_is_immutable() {
+    let mut manager = SessionManager::new(policy());
+    let peer = source(4000);
+    let other = source(4001);
+    let start = Instant::now();
+    let first = manager.admit(peer, start).unwrap();
+    let second = manager.admit(other, start).unwrap();
+    let first_id = match first.outcome {
+      AdmissionOutcome::Added { candidate_id, .. } => candidate_id,
+      _ => panic!("expected first candidate admission"),
+    };
+    let second_id = match second.outcome {
+      AdmissionOutcome::Added { candidate_id, .. } => candidate_id,
+      _ => panic!("expected second candidate admission"),
+    };
+
+    assert!(matches!(
+      manager.remove_candidate(peer, CandidateId(first_id.0.wrapping_add(100))),
+      CandidateRemoval::CandidateMismatch { expected, observed } if expected == first_id && observed == CandidateId(first_id.0.wrapping_add(100))
+    ));
+    assert_eq!(manager.pending_count(), 2);
+    assert_eq!(
+      manager.remove_candidate(peer, first_id),
+      CandidateRemoval::Removed
+    );
+    assert_eq!(manager.pending_count(), 1);
+    assert_eq!(manager.candidate(other).unwrap().candidate_id, second_id);
+    assert_eq!(
+      manager.remove_candidate(peer, first_id),
+      CandidateRemoval::NotFound
+    );
+
+    manager.shutdown();
+    assert_eq!(
+      manager.remove_candidate(other, second_id),
+      CandidateRemoval::Closed
+    );
+    assert_eq!(manager.candidate(other), None);
   }
 }

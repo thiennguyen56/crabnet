@@ -3,35 +3,11 @@
 //! This module owns only synchronous state transitions. It does not decode
 //! wire messages, perform cryptography, access sockets, or forward packets.
 
+use crate::session::types::{ClientAttemptId, EstablishedSessionMetadata, SessionId};
 use std::error::Error;
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-
-/// Local identifier for one client handshake attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct ClientAttemptId(u64);
-
-/// Non-secret policy token identifying one authenticated session.
-///
-/// The integer is not a frozen wire representation. A later secure-protocol
-/// milestone will replace its construction with authenticated session output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct SessionId(u64);
-
-/// Non-secret policy token identifying the authenticated server credential.
-///
-/// This token is not a socket address, PSK, or derived key. Its final
-/// representation belongs to the security-configuration milestone.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct PeerIdentity(u64);
-
-/// Non-secret metadata produced only after authenticated key confirmation.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct EstablishedSessionMetadata {
-  session_id: SessionId,
-  peer_identity: PeerIdentity,
-}
 
 /// Client-side handshake lifecycle.
 #[derive(Debug, PartialEq, Eq)]
@@ -82,6 +58,8 @@ impl ClientHandshakeState {
   }
 
   /// Returns the structurally expected inbound message for the current state.
+  /// Returns the message kind structurally expected in this state.
+  /// Returns the message kind structurally expected in this state.
   const fn expected_inbound(&self) -> Option<ClientInboundKind> {
     match self {
       Self::AwaitingServerHello { .. } => Some(ClientInboundKind::ServerHello),
@@ -375,6 +353,8 @@ impl ClientHandshake {
     ClientAction::Closed
   }
 
+  /// Reserves the next client attempt identifier without wrapping.
+  /// Reserves the next client attempt identifier without wrapping.
   fn reserve_attempt_id(&mut self) -> Result<ClientAttemptId, ClientStateError> {
     let current = self.next_attempt_id;
     let next = current
@@ -384,6 +364,8 @@ impl ClientHandshake {
     Ok(ClientAttemptId(current))
   }
 
+  /// Builds a drop decision for input from an unexpected endpoint.
+  /// Builds a drop decision for input from an unexpected endpoint.
   fn unexpected_source(&self, observed: SocketAddr) -> ClientAction {
     ClientAction::Dropped {
       reason: ClientDropReason::UnexpectedSource {
@@ -570,8 +552,7 @@ pub(crate) enum ClientStateName {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  mod additional_tests;
+  use crate::session::types::PeerIdentity;
 
   const TIMEOUT: Duration = Duration::from_secs(10);
 
