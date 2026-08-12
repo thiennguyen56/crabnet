@@ -8,11 +8,6 @@
 mod application;
 mod client;
 mod config;
-mod firewall;
-mod nat;
-mod protocol;
-mod routing;
-mod server;
 #[cfg_attr(
   not(test),
   expect(
@@ -20,6 +15,12 @@ mod server;
     reason = "milestone 2.2 defines pure session policy before runtime integration"
   )
 )]
+mod crypto;
+mod firewall;
+mod nat;
+mod protocol;
+mod routing;
+mod server;
 mod session;
 mod tun;
 

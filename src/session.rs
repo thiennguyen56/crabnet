@@ -18,6 +18,14 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CandidateId(u64);
 
+#[cfg(test)]
+impl CandidateId {
+  /// Constructs a candidate token supplied by session policy or a pure test fixture.
+  pub(crate) const fn new(value: u64) -> Self {
+    Self(value)
+  }
+}
+
 /// Validated limits governing pending and established session lifetimes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SessionPolicy {

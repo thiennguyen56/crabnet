@@ -1,11 +1,9 @@
-//! Reserved cryptography extension point.
+//! Typed cryptographic handshake boundary.
+//!
+//! Session policy owns lifecycle authorization and deadlines. Crypto providers
+//! own credentials, transcript authentication, and provider-private contexts.
 
-/// Placeholder for a future authenticated-encryption implementation.
-pub struct Crypto {}
-
-impl Crypto {
-  /// Creates the current no-op cryptography placeholder.
-  pub fn new() -> Self {
-    Self {}
-  }
-}
+pub(crate) mod client;
+pub(crate) mod fake;
+pub(crate) mod server;
+pub(crate) mod types;

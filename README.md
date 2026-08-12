@@ -26,6 +26,41 @@ Networking software is difficult to understand when protocols, routing, NAT,
 and transport are tightly coupled. Crabnet keeps these pieces replaceable and
 testable so the tunnel can be built incrementally.
 
+## Container image
+
+Build the small production image with the locked dependency versions:
+
+```bash
+docker build --tag crabnet:local .
+```
+
+Crabnet must manage a TUN device, routes, and (when configured) nftables state. Run it with
+only the additional capability and device it needs rather than `--privileged`:
+
+```bash
+docker run --rm --name crabnet \
+  --cap-drop ALL \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  --publish 51820:51820/udp \
+  --volume ./crabnet.toml:/etc/crabnet/config.toml:ro \
+  crabnet:local --config-path /etc/crabnet/config.toml
+```
+
+The configuration used in a normal Docker network should bind UDP to `0.0.0.0` and refer to
+interfaces that exist inside the container (the ordinary egress interface is commonly `eth0`).
+The files under `config/` target the namespace integration lab and are not ready-made Docker
+settings. If server forwarding is enabled, `--sysctl net.ipv4.ip_forward=1` may be supplied at
+container creation; Crabnet will observe that pre-existing value without claiming ownership of
+it.
+
+The image intentionally runs as root because its `ip`, `sysctl`, and `nft` child processes need
+`CAP_NET_ADMIN`; dropping every other capability limits that privilege. Do not use host
+networking casually: client routes or server NAT would then modify the host network namespace.
+The current full-tunnel client also refuses to replace Docker's existing default route, so it
+requires a deliberately prepared, isolated network namespace rather than a standard bridge
+network.
+
 ## Local TUN tunnel test
 
 This is one end-to-end workflow using four Linux network namespaces:
