@@ -5,4 +5,8 @@
 
 pub(crate) mod types;
 pub(crate) mod v1;
+#[allow(
+  dead_code,
+  reason = "protocol v2 types are designed before runtime integration"
+)]
 pub(crate) mod v2;

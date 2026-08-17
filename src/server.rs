@@ -168,6 +168,12 @@ impl ServerState {
 
     let payload = match decoded.message_type() {
       MessageType::Data => decoded.payload(),
+      unsupported => {
+        self.stats.dropped_invalid_frames = self.stats.dropped_invalid_frames.saturating_add(1);
+        return UdpFrameDecision::DropInvalid(DecodeError::UnknownMessageType {
+          observed: unsupported.wire_value(),
+        });
+      }
     };
 
     let newly_registered = match self.peer.observe(candidate) {

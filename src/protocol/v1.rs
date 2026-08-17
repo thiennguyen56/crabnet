@@ -16,23 +16,11 @@ const MAGIC: [u8; 4] = *b"CRBN";
 const HEADER_LEN: usize = 10;
 const FLAGS_NONE: u16 = 0;
 
-impl MessageType {
-  /// Returns the stable version 1 wire value.
-  const fn wire_value(self) -> u8 {
-    match self {
-      Self::Data => 1,
-    }
-  }
-}
-
-impl TryFrom<u8> for MessageType {
-  type Error = DecodeError;
-
-  fn try_from(value: u8) -> Result<Self, Self::Error> {
-    match value {
-      1 => Ok(Self::Data),
-      _ => Err(DecodeError::UnknownMessageType { observed: value }),
-    }
+/// Decodes only message types supported by protocol version 1.
+fn decode_message_type(value: u8) -> Result<MessageType, DecodeError> {
+  match value {
+    1 => Ok(MessageType::Data),
+    _ => Err(DecodeError::UnknownMessageType { observed: value }),
   }
 }
 
@@ -177,7 +165,7 @@ impl FrameCodec {
     }
 
     ProtocolVersion::try_from(datagram[4])?;
-    let message_type = MessageType::try_from(datagram[5])?;
+    let message_type = decode_message_type(datagram[5])?;
 
     let flags = u16::from_be_bytes([datagram[6], datagram[7]]);
     if flags != FLAGS_NONE {
@@ -474,6 +462,28 @@ mod tests {
       codec.decode(&invalid_flags),
       Err(DecodeError::UnsupportedFlags { observed: 1 })
     );
+  }
+
+  #[test]
+  fn rejects_version_two_handshake_message_types() {
+    let codec = codec();
+
+    for message_type in [
+      MessageType::ClientHello,
+      MessageType::ServerHello,
+      MessageType::ClientFinish,
+      MessageType::ServerFinish,
+    ] {
+      let mut frame = encode(&[0x45]);
+      frame[5] = message_type.wire_value();
+
+      assert_eq!(
+        codec.decode(&frame),
+        Err(DecodeError::UnknownMessageType {
+          observed: message_type.wire_value(),
+        })
+      );
+    }
   }
 
   #[test]

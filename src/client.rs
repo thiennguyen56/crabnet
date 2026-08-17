@@ -265,6 +265,15 @@ impl Client {
 
           let payload = match decoded.message_type() {
             MessageType::Data => decoded.payload(),
+            unsupported => {
+              state.record_invalid_udp_frame();
+              log::debug!(
+                "Dropping unsupported Crabnet v1 message type {} from {}",
+                unsupported.wire_value(),
+                self.config.server_addr,
+              );
+              continue;
+            }
           };
 
           log::debug!(
