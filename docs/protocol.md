@@ -6,7 +6,8 @@ This document distinguishes the active wire protocol from the completed pure han
 | --- | --- |
 | Version 1 data frame below | Implemented and used by the executable |
 | Four-message fake handshake | Implemented only as owned in-memory Rust values |
-| Version 2 authenticated wire format | Not designed or implemented |
+| Version 2 handshake framing codec | Implemented and pure-tested, but not used by the executable |
+| Authenticated and encrypted runtime protocol | Not implemented |
 
 Crabnet transports one raw inner IP packet in one version 1 data frame carried
 by one UDP datagram. The frame distinguishes Crabnet traffic, enforces explicit
@@ -59,6 +60,41 @@ valid frame. Empty, oversized, malformed, and unsupported frames cannot select
 the peer. Once selected, later datagrams from other addresses are rejected
 without replacing it.
 
+## Version 2 handshake frame
+
+The pure version 2 codec defines a bounded byte envelope for the four handshake messages. It does
+not select a cryptographic protocol, interpret provider payloads, or send datagrams.
+
+All multi-byte integers use network byte order.
+
+| Offset | Size | Field | Version 2 requirement |
+| ---: | ---: | --- | --- |
+| 0 | 4 | Magic | ASCII `CRBN` |
+| 4 | 1 | Version | `2` |
+| 5 | 1 | Message type | `2` through `5` for the four handshake messages |
+| 6 | 2 | Flags | Must be zero |
+| 8 | 2 | Body length | Exact length after the 10-byte header |
+| 10 | 8 | Client attempt ID | Non-zero unsigned integer |
+| 18 | N | Opaque payload | Non-empty and within the configured maximum |
+
+For a configured maximum opaque payload of `P`:
+
+```text
+maximum body length            = 8 + P
+maximum valid datagram length  = 10 + 8 + P
+UDP receive buffer             = maximum valid datagram length + 1
+```
+
+Construction rejects a zero maximum, arithmetic overflow, a body that does not fit its 16-bit
+field, and a maximum datagram above the IPv4-safe UDP payload ceiling of 65,507 bytes. Decoding
+requires exact lengths and borrows the opaque payload without allocation. The client accepts only
+`ServerHello` and `ServerFinish`; the server accepts only `ClientHello` and `ClientFinish`.
+Version 1 data and version 2 handshake message types are mutually rejected.
+
+See [the framing design](handshake-framing-design.md) for the exhaustive contract. This codec is
+not connected to sockets or the coordinators, so successful parsing is neither authentication nor
+permission to forward packets.
+
 ## Security boundary
 
 Version 1 framing does not provide authentication, confidentiality, integrity,
@@ -79,7 +115,7 @@ authenticated protocol must define peer identity, key establishment,
 directional keys, nonce construction, sequence validation, and replay rules
 before use on untrusted networks.
 
-## Pure handshake messages are not wire frames
+## Pure handshake messages and byte envelopes remain separate
 
 Milestone 2.3 defines these generic transport-neutral values:
 
@@ -95,19 +131,20 @@ no magic bytes, message numbers, field widths, length encoding, fragmentation, r
 downgrade behavior. `CandidateId` is server-local and must not be copied into a wire format merely
 because the fake provider uses it internally.
 
-The in-memory flow proves coordinator ordering and correlation rules, not serialization:
+The V2 codec can wrap an attempt ID and already-serialized opaque bytes, but a future provider
+adapter must perform that conversion. The in-memory flow proves coordinator ordering:
 
 ```text
 ClientHello → ServerHello → ClientFinish → ServerFinish
 ```
 
-## Requirements for a future version 2
+## Remaining requirements for an authenticated version 2 runtime
 
-Before a version 2 parser reaches the coordinator, the protocol design must specify:
+Before the V2 codec reaches the coordinator or runtime, the protocol design must specify:
 
-- an unambiguous frame discriminator and version negotiation/downgrade policy;
-- exact handshake message encodings and maximum sizes;
 - reviewed authentication and key-agreement semantics;
+- authenticated binding of the outer frame fields, roles, and selected configuration;
+- an operational opaque-payload limit with path-MTU reasoning;
 - how identities and the UDP endpoint are bound to the transcript;
 - how an established `SessionId` selects encrypted data state;
 - directional key and nonce derivation;

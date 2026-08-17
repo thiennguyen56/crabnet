@@ -860,43 +860,43 @@ All are pure unit tests: no socket, TUN, root, or namespace.
 
 Configuration:
 
-- [ ] reject maximum `0`;
-- [ ] limit `1` derives datagram `19` and receive buffer `20`;
-- [ ] accept the largest IPv4-safe configuration and reject one byte above it;
-- [ ] report arithmetic overflow rather than wrap; and
-- [ ] return exact accessor values.
+- [x] reject maximum `0`;
+- [x] limit `1` derives datagram `19` and receive buffer `20`;
+- [x] accept the largest IPv4-safe configuration and reject one byte above it;
+- [x] report arithmetic overflow rather than wrap; and
+- [x] return exact accessor values.
 
 Encoding:
 
-- [ ] freeze exact byte vectors for all four handshake message types;
-- [ ] prove big-endian IDs for `1`, `0x0102030405060708`, and `u64::MAX`;
-- [ ] prove body length includes eight ID bytes;
-- [ ] prove encoded length equals `18 + payload.len()`;
-- [ ] preserve zero and invalid-UTF-8 bytes exactly;
-- [ ] reject zero ID, empty payload, maximum-plus-one payload, and undersized output;
-- [ ] leave the entire output unchanged on every error; and
-- [ ] leave bytes after the encoded prefix unchanged on success.
+- [x] freeze exact byte vectors for all four handshake message types;
+- [x] prove big-endian IDs for `1`, `0x0102030405060708`, and `u64::MAX`;
+- [x] prove body length includes eight ID bytes;
+- [x] prove encoded length equals `18 + payload.len()`;
+- [x] preserve zero and invalid-UTF-8 bytes exactly;
+- [x] reject zero ID, empty payload, maximum-plus-one payload, and undersized output;
+- [x] leave the entire output unchanged on every error; and
+- [x] leave bytes after the encoded prefix unchanged on success.
 
 Decoding:
 
-- [ ] accept all four handshake message types at minimum and maximum payload sizes;
-- [ ] prove the payload borrows the original datagram;
-- [ ] round-trip message type, ID, and bytes;
-- [ ] reject every length `0..=9` without panic;
-- [ ] reject each corrupted magic byte, unsupported version/message type, and non-zero flags;
-- [ ] reject declared-shorter, declared-longer, and trailing-byte cases;
-- [ ] reject body lengths `0..=8`, zero ID, and maximum-plus-one payload;
-- [ ] classify maximum-datagram-plus-one receive as oversized; and
-- [ ] never expose a partial frame on failure.
+- [x] accept all four handshake message types at minimum and maximum payload sizes;
+- [x] prove the payload borrows the original datagram;
+- [x] round-trip message type, ID, and bytes;
+- [x] reject every length `0..=9` without panic;
+- [x] reject each corrupted magic byte, unsupported version/message type, and non-zero flags;
+- [x] reject declared-shorter, declared-longer, and trailing-byte cases;
+- [x] reject body lengths `0..=8`, zero ID, and maximum-plus-one payload;
+- [x] classify maximum-datagram-plus-one receive as oversized; and
+- [x] never expose a partial frame on failure.
 
 Direction and compatibility:
 
-- [ ] test the full four-message matrix for client and server roles;
-- [ ] keep existing V1 frozen vectors and error behavior unchanged;
-- [ ] make V1 reject V2 and V2 reject valid V1;
-- [ ] test every truncation of every valid vector;
-- [ ] use table-driven header mutations; and
-- [ ] prove error formatting never contains payload bytes.
+- [x] test the full four-message matrix for client and server roles;
+- [x] keep existing V1 frozen vectors and error behavior unchanged;
+- [x] make V1 reject V2 and V2 reject valid V1;
+- [x] test every truncation of every valid vector;
+- [x] use table-driven header mutations; and
+- [x] prove error formatting never contains payload bytes.
 
 Future integration tests, not 2.4: loss, duplicates, reordering, timeouts, address change, send failure
 after state advancement, cancellation races, transcript tampering, establishment-before-data,
@@ -959,14 +959,14 @@ Each step includes a failure signal and acceptance condition.
 
 ### 2.4.1 Freeze the outer contract
 
-- [ ] Approve fields, offsets, values, byte order, flags, and length semantics in this document.
+- [x] Approve fields, offsets, values, byte order, flags, and length semantics in this document.
 
 Failure: any undecided byte or disagreement over body length. Acceptance: the tables determine every
 non-opaque byte.
 
 ### 2.4.2 Add pure types and configuration
 
-- [ ] Add shared message types, borrowed body/frame enums, codec configuration, errors, and role
+- [x] Add shared message types, borrowed body/frame enums, codec configuration, errors, and role
   types.
 
 Failure: decode requires allocation, a `CandidateId` enters a wire type, or invalid limits succeed.
@@ -974,46 +974,46 @@ Acceptance: constructor and version-specific message-type conversion tests pass 
 
 ### 2.4.3 Add encoding
 
-- [ ] Add length calculation and caller-buffer encoding.
+- [x] Add length calculation and caller-buffer encoding.
 
 Failure: an error mutates output, bytes become text, or platform endianness changes vectors.
 Acceptance: vectors, boundaries, and output-preservation tests pass.
 
 ### 2.4.4 Add decoding
 
-- [ ] Add ordered validation and borrowed output.
+- [x] Add ordered validation and borrowed output.
 
 Failure: truncation panics, trailing/oversized input succeeds, or decode allocates. Acceptance: the
 rejection/truncation matrices, round trips, and preservation tests pass.
 
 ### 2.4.5 Add role classification
 
-- [ ] Add client and server classifiers.
+- [x] Add client and server classifiers.
 
 Failure: a same-role outbound message reaches a receive method. Acceptance: all eight
 role/message-type cases pass.
 
 ### 2.4.6 Prove V1 compatibility
 
-- [ ] Run existing V1 tests and add cross-version rejection tests.
+- [x] Run existing V1 tests and add cross-version rejection tests.
 
 Failure: V1 vectors/errors change or a decoder accepts the other version. Acceptance: V1/V2 tests
 pass and client/server runtime files have no behavioral diff.
 
 ### 2.4.7 Update current docs
 
-- [ ] Update protocol, testing, architecture, README, and security wording after implementation.
+- [x] Update protocol, testing, architecture, README, and security wording after implementation.
 
 Failure: any document says authenticated, encrypted, connected, or production-ready. Acceptance:
 all current docs say that V2 framing is pure and disconnected.
 
 ### 2.4.8 Run the unprivileged gate
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo build`
-- [ ] `git diff --check`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test`
+- [x] `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] `cargo build`
+- [x] `git diff --check`
 
 Failure: any command, warning, unrelated diff, or dependency change. Acceptance: all pass. The
 privileged namespace test is unnecessary because 2.4 changes no live networking behavior.

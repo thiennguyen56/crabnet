@@ -2,9 +2,10 @@
 
 Crabnet is not production-safe at the current milestone.
 
-The pure fake-crypto handshake completed in Milestone 2.3 is a software-design test boundary, not a
-deployed security boundary. It has no wire encoding, uses deterministic non-cryptographic proofs,
-and is not called by the executable.
+The pure fake-crypto handshake and V2 byte-envelope codec are software-design test boundaries, not
+a deployed security boundary. The fake provider uses deterministic non-cryptographic proofs, the
+codec does not authenticate its outer fields or opaque payload, and neither subsystem is called by
+the executable.
 
 - UDP traffic is unauthenticated.
 - Inner packets are not encrypted.
@@ -49,6 +50,7 @@ cryptographic protocol.
 ## Security work still required
 
 Use a reviewed protocol/library, then add secret loading and zeroization strategy, authenticated
-wire parsing, encrypted data frames, unique nonces, anti-replay state, rekeying, downgrade
-protection, resource limits, runtime forwarding gates, and adversarial integration tests. Firewall
+binding for the V2 envelope, provider-payload parsing, encrypted data frames, unique nonces,
+anti-replay state, rekeying, downgrade protection, resource limits, runtime forwarding gates, and
+adversarial integration tests. Firewall
 policy and DNS handling remain separate operator/runtime responsibilities.

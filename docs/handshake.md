@@ -6,9 +6,10 @@ subsystem. For the exhaustive design contract and pseudocode, see
 
 ## Current status
 
-The authenticated handshake is implemented and tested as synchronous, transport-neutral Rust
-code. It is **not connected to the UDP forwarding runtime**. The executable still uses version 1
-data frames and the first valid frame selects the server peer without authentication.
+The authenticated-handshake model and its bounded version 2 byte envelope are implemented and
+tested as synchronous, transport-neutral Rust code. They are **not connected to the UDP forwarding
+runtime**. The executable still uses version 1 data frames, and the first valid frame selects the
+server peer without authentication.
 
 This separation is deliberate:
 
@@ -17,11 +18,13 @@ implemented pure subsystem                 active runtime
 
 session policy                             TUN packet
       ↕                                         ↓
-handshake coordinator                     version 1 frame
+handshake coordinator                     version 1 data frame
       ↕                                         ↓
 fake crypto provider                      UDP datagram
+      ↕
+version 2 handshake codec
 
-no sockets, no bytes, no Tokio             no secure handshake
+no sockets, no Tokio                       no secure handshake
 ```
 
 A passing pure handshake test proves state-machine and coordination behavior. It does not make the
@@ -180,7 +183,7 @@ Read in this order:
 ## What it does not prove
 
 - a real cryptographic construction is safe;
-- handshake bytes can be encoded or decoded;
+- version 2 handshake bytes are carried by UDP or used by the executable;
 - UDP loss, duplication, reordering, cancellation, or retry behavior works;
 - data frames are bound to an established session;
 - encryption, nonces, replay windows, rekeying, or downgrade protection exists; or
@@ -188,10 +191,11 @@ Read in this order:
 
 ## Next milestone boundary
 
-Before runtime integration, select a reviewed authenticated protocol or library and define a
-version 2 wire/configuration contract. Then add a transport adapter that parses untrusted bytes,
-feeds owned messages into these coordinators, sends returned outbound messages, and schedules the
-nearest deadline without holding coordinator borrows across `.await`.
+Before runtime integration, select a reviewed authenticated protocol or library and define its
+operational payload limit, transcript binding, and provider-payload adapter. Then add a transport
+adapter that applies the version 2 framing codec to untrusted datagrams, feeds owned messages into
+these coordinators, sends returned outbound messages, and schedules the nearest deadline without
+holding coordinator borrows across `.await`.
 
 Do not place fake crypto on the live network and do not invent production cryptography merely to
 connect the coordinator to UDP.
