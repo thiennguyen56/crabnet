@@ -10,43 +10,25 @@
 use std::error::Error;
 use std::fmt;
 
-use super::types::{DecodedFrame, MessageType};
+use super::types::{DecodedFrame, MessageType, ProtocolVersion};
 
 const MAGIC: [u8; 4] = *b"CRBN";
 const HEADER_LEN: usize = 10;
 const FLAGS_NONE: u16 = 0;
+
+/// Decodes only the protocol version supported by the version 1 codec.
+fn decode_version(value: u8) -> Result<ProtocolVersion, DecodeError> {
+  match value {
+    1 => Ok(ProtocolVersion::V1),
+    _ => Err(DecodeError::UnsupportedVersion { observed: value }),
+  }
+}
 
 /// Decodes only message types supported by protocol version 1.
 fn decode_message_type(value: u8) -> Result<MessageType, DecodeError> {
   match value {
     1 => Ok(MessageType::Data),
     _ => Err(DecodeError::UnknownMessageType { observed: value }),
-  }
-}
-
-/// Supported Crabnet wire-protocol version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProtocolVersion {
-  V1,
-}
-
-impl ProtocolVersion {
-  /// Returns the stable wire value for this version.
-  const fn wire_value(self) -> u8 {
-    match self {
-      Self::V1 => 1,
-    }
-  }
-}
-
-impl TryFrom<u8> for ProtocolVersion {
-  type Error = DecodeError;
-
-  fn try_from(value: u8) -> Result<Self, Self::Error> {
-    match value {
-      1 => Ok(Self::V1),
-      _ => Err(DecodeError::UnsupportedVersion { observed: value }),
-    }
   }
 }
 
@@ -164,7 +146,7 @@ impl FrameCodec {
       });
     }
 
-    ProtocolVersion::try_from(datagram[4])?;
+    decode_version(datagram[4])?;
     let message_type = decode_message_type(datagram[5])?;
 
     let flags = u16::from_be_bytes([datagram[6], datagram[7]]);

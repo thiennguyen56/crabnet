@@ -351,12 +351,14 @@ The pure, stateless codec:
 It knows nothing about addresses, candidates, sessions, deadlines, keys, identities, Tokio, I/O,
 policy, coordinators, or providers. It accepts no V1 data frame.
 
-### Shared `MessageType`
+### Shared `ProtocolVersion` and `MessageType`
 
+`protocol::types::ProtocolVersion` owns the stable values for V1 and V2, while
 `protocol::types::MessageType` owns the stable wire discriminator values for `Data` and all four
-handshake messages. Each version still validates its allowed subset: V1 accepts only `Data`, while
-the V2 handshake codec accepts only `ClientHello`, `ServerHello`, `ClientFinish`, and
-`ServerFinish`. Sharing the enum does not permit cross-version messages.
+handshake messages. Each codec still validates its allowed version and message subset: V1 accepts
+only version `1` with `Data`, while the V2 handshake codec accepts only version `2` with
+`ClientHello`, `ServerHello`, `ClientFinish`, or `ServerFinish`. Sharing the enums does not permit
+cross-version messages.
 
 ### `DecodedV2HandshakeBody<'datagram>` and `DecodedV2HandshakeFrame<'datagram>`
 
@@ -448,6 +450,10 @@ policy after admission and never crosses the wire. An enum variant such as
 ### Core types
 
 ```text
+ENUM ProtocolVersion IN protocol/types:
+  V1 = 1
+  V2 = 2
+
 ENUM MessageType IN protocol/types:
   Data         = 1
   ClientHello  = 2
@@ -935,7 +941,7 @@ and cancellation semantics.
 | File | Intended implementation change |
 | --- | --- |
 | `src/protocol.rs` | Declare the `types`, `v1`, and `v2` child modules |
-| `src/protocol/types.rs` | Own shared `MessageType` variants and stable wire values |
+| `src/protocol/types.rs` | Own shared protocol versions, message types, and stable wire values |
 | `src/protocol/v1.rs` | Preserve the existing V1 codec and accept only `Data` |
 | `src/protocol/v2.rs` | Pure V2 types, codec, errors, classifiers, and colocated tests |
 | `src/session/types.rs` | Optional checked attempt-ID wire constructor; avoid broad redesign |
