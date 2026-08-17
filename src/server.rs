@@ -3,7 +3,8 @@
 //! The first completely validated Crabnet frame registers the only active UDP
 //! peer. Later traffic from other addresses is rejected without replacing it.
 
-use crate::protocol::{DecodeError, FrameCodec, MessageType};
+use crate::protocol::types::MessageType;
+use crate::protocol::v1::{DecodeError, FrameCodec};
 use crate::{tun::TunConfig, tun::TunDevice};
 use anyhow::Context;
 use std::net::SocketAddr;
@@ -167,6 +168,12 @@ impl ServerState {
 
     let payload = match decoded.message_type() {
       MessageType::Data => decoded.payload(),
+      unsupported => {
+        self.stats.dropped_invalid_frames = self.stats.dropped_invalid_frames.saturating_add(1);
+        return UdpFrameDecision::DropInvalid(DecodeError::UnknownMessageType {
+          observed: unsupported.wire_value(),
+        });
+      }
     };
 
     let newly_registered = match self.peer.observe(candidate) {

@@ -3,7 +3,8 @@
 Crabnet is a Linux/Tokio TUN-over-UDP learning prototype with two deliberately separate tracks:
 
 - an active version 1 packet-forwarding runtime; and
-- a completed pure authenticated-handshake subsystem that is not wired into that runtime yet.
+- a completed pure authenticated-handshake subsystem and V2 framing codec that are not wired into
+  that runtime yet.
 
 ```text
 CLI/config
@@ -30,7 +31,8 @@ Shutdown
 Pure handshake tests only
    ├─ Client/Server session policy
    ├─ Client/Server handshake coordinator
-   └─ Fake crypto provider
+   ├─ Fake crypto provider
+   └─ Version 2 handshake codec
 ```
 
 The vertical runtime path moves real packets and changes Linux network state. The pure handshake
@@ -52,7 +54,8 @@ connect a reviewed protocol to the coordinator; fake crypto must never be used f
 - `src/nat/linux.rs`: atomic nftables installation, inspection, and cleanup.
 - `src/routing/manager.rs`: route operations, ownership, rollback, and restoration.
 - `src/routing/linux.rs`: `ip` and `sysctl` command backend.
-- `src/protocol.rs`: version 1 frame encoding, decoding, and MTU-aware buffer boundaries.
+- `src/protocol.rs`: active version 1 data framing and the pure, bounded version 2 handshake
+  codec.
 - `src/session.rs`: bounded pending-handshake ownership, capacity, expiration, and shutdown policy.
 - `src/session/client.rs`: pure client handshake states, authenticated-result transitions,
   per-phase deadlines, pre-session data decisions, and terminal shutdown.
@@ -88,8 +91,9 @@ typed drop rather than a fatal local error.
 The next architecture boundary is not “call the fake coordinator from the socket loop.” It is:
 
 1. select a reviewed authenticated protocol or library;
-2. define version 2 bytes, configuration, downgrade behavior, and data-session binding;
-3. implement a parser/serializer that produces and consumes the owned handshake messages;
+2. define provider payload encoding, transcript binding, operational size limits, downgrade
+   behavior, and data-session binding;
+3. adapt provider payloads between the owned handshake messages and the V2 framing codec;
 4. integrate coordinator deadlines and outbound effects into cancellation-aware Tokio loops; and
 5. activate packet forwarding only after establishment.
 

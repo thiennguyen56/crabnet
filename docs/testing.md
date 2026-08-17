@@ -16,9 +16,11 @@ cover chain filtering, policy assessment, malformed JSON, inspection failure,
 timeout behavior, context construction, and the exact read-only nft command;
 they do not require root or inspect the host firewall.
 
-Protocol unit tests cover the exact version 1 wire layout, binary round trips,
-MTU boundaries, undersized output buffers, malformed headers, unsupported
-fields, and declared-length mismatches. Server state tests prove that only a
+Protocol unit tests cover the exact version 1 data layout and pure version 2 handshake layout,
+binary round trips, size boundaries, undersized output buffers, malformed headers, unsupported
+fields, declared-length mismatches, every V2 truncation, role classification, cross-version
+rejection, unchanged output on encode errors, borrowed payloads, and diagnostic redaction. These
+V2 tests use no sockets and do not prove runtime integration. Server state tests prove that only a
 valid decoded frame can register the first peer.
 
 Pending-session policy tests cover configuration rejection, duplicate ownership, bounded capacity,
@@ -48,7 +50,7 @@ authentication or encryption.
 
 | Change | Minimum focused test |
 | --- | --- |
-| Packet framing or MTU boundary | `cargo test protocol::tests` |
+| Packet framing or size boundary | `cargo test protocol::` |
 | Candidate/session policy | `cargo test session::` |
 | Fake provider transcript | `cargo test crypto::fake::tests` |
 | Client coordinator | `cargo test handshake::client::tests` |

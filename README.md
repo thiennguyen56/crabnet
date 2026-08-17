@@ -5,9 +5,10 @@
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
 versioned packet framing, client split/full-tunnel routes, server IPv4
-forwarding, and IPv4 masquerading. A transport-neutral four-message handshake
-using deterministic fake crypto is also complete and thoroughly tested, but it
-is not connected to the UDP runtime and provides no live security.
+forwarding, and IPv4 masquerading. A transport-neutral four-message handshake and bounded version
+2 byte-envelope codec are also complete and thoroughly tested, but neither is connected to the UDP
+runtime. The fake provider is not real cryptography, and the framing codec alone provides no live
+security.
 
 ## Documentation
 
@@ -20,6 +21,8 @@ is not connected to the UDP runtime and provides no live security.
 - [Security limitations](docs/security-limitations.md)
 - [Routing sequence diagrams](docs/routing-sequences.md)
 - [Milestone 2.3 exhaustive design](docs/milestone-2.3-pure-handshake-coordination-design.md)
+- [Version 2 handshake framing design](docs/handshake-framing-design.md)
+- [Noise IK provider design](docs/noise-ik-provider-design.md)
 
 ## Current milestone status
 
@@ -29,13 +32,14 @@ is not connected to the UDP runtime and provides no live security.
 | Routes, forwarding diagnostics, and IPv4 NAT | Active runtime | Linux lab functionality with ownership-aware cleanup |
 | Session policy and fake crypto traits | Complete pure subsystem | Synchronous and testable without sockets or privileges |
 | Milestone 2.3 handshake coordination | Complete pure subsystem | Four fake handshake messages establish matching metadata |
-| Authenticated wire protocol and runtime integration | Not implemented | No handshake bytes, real crypto, or data-session binding |
+| Version 2 handshake framing | Complete pure subsystem | Exact bounded bytes, not connected to UDP or crypto payload parsing |
+| Authenticated wire protocol and runtime integration | Not implemented | No real crypto or data-session binding |
 | Production VPN security | Not implemented | No encryption, replay protection, rekeying, or DNS handling |
 
 Use [the handshake guide](docs/handshake.md) to understand the new state machines and coordinator
-before reading the exhaustive milestone document. The next milestone must choose a reviewed
-protocol/library and define version 2 wire and configuration semantics before touching the UDP
-runtime.
+before reading the exhaustive milestone documents. The next milestone must choose a reviewed
+protocol/library, bind the V2 envelope into its authenticated transcript, and define provider
+payload encoding and operational limits before touching the UDP runtime.
 
 ## Why Crabnet?
 

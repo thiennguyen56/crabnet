@@ -4,7 +4,8 @@
 //! transmission. Received frames are validated and decoded before their raw
 //! inner payload is written to TUN.
 
-use crate::protocol::{FrameCodec, MessageType};
+use crate::protocol::types::MessageType;
+use crate::protocol::v1::FrameCodec;
 use crate::{tun::TunConfig, tun::TunDevice};
 use anyhow::Context;
 use std::net::SocketAddr;
@@ -264,6 +265,15 @@ impl Client {
 
           let payload = match decoded.message_type() {
             MessageType::Data => decoded.payload(),
+            unsupported => {
+              state.record_invalid_udp_frame();
+              log::debug!(
+                "Dropping unsupported Crabnet v1 message type {} from {}",
+                unsupported.wire_value(),
+                self.config.server_addr,
+              );
+              continue;
+            }
           };
 
           log::debug!(
