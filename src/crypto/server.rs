@@ -7,6 +7,37 @@ use crate::crypto::types::{
 use crate::session::types::{ClientAttemptId, EstablishedSessionMetadata, SessionId};
 use crate::session::CandidateId;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServerCryptoStatus {
+  pub(crate) phase: ServerCryptoPhase,
+  pub(crate) pending_contexts: usize,
+  pub(crate) has_pending_commit: bool,
+  pub(crate) has_established_context: bool,
+}
+
+impl ServerCryptoStatus {
+  pub(crate) fn new(
+    phase: ServerCryptoPhase,
+    pending_contexts: usize,
+    has_pending_commit: bool,
+    has_established_context: bool,
+  ) -> Self {
+    Self {
+      phase,
+      pending_contexts,
+      has_pending_commit,
+      has_established_context,
+    }
+  }
+
+  pub(crate) fn is_fresh(&self) -> bool {
+    self.phase == ServerCryptoPhase::Running
+      && self.pending_contexts == 0
+      && !self.has_pending_commit
+      && !self.has_established_context
+  }
+}
+
 pub(crate) trait ServerHandshakeCrypto {
   type ClientHelloPayload;
   type ServerHelloPayload;
@@ -14,6 +45,8 @@ pub(crate) trait ServerHandshakeCrypto {
   type ServerFinishPayload;
 
   fn phase(&self) -> ServerCryptoPhase;
+
+  fn non_secret_status(&self) -> ServerCryptoStatus;
   fn prepare_server_hello(
     &mut self,
     candidate_id: CandidateId,

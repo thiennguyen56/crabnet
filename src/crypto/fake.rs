@@ -5,7 +5,7 @@ use std::fmt;
 use std::num::NonZeroU64;
 
 use crate::crypto::client::ClientHandshakeCrypto;
-use crate::crypto::server::ServerHandshakeCrypto;
+use crate::crypto::server::{ServerCryptoStatus, ServerHandshakeCrypto};
 use crate::crypto::types::{
   AuthenticatedClientFinish, AuthenticatedServerFinish, AuthenticatedServerHello,
   AuthenticationFailure, AuthenticationFailureReason, ClientContextRemoval, ClientCryptoOperation,
@@ -142,12 +142,28 @@ pub(crate) struct FakeClientHello {
   proof: FakeProof,
 }
 
+#[cfg(test)]
+impl FakeClientHello {
+  pub(crate) fn with_corrupted_proof(mut self) -> Self {
+    self.proof.domain = FakeProofDomain::ServerFinish;
+    self
+  }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FakeServerHello {
   candidate_id: CandidateId,
   client_attempt_id: ClientAttemptId,
   server_identity: PeerIdentity,
   proof: FakeProof,
+}
+
+#[cfg(test)]
+impl FakeServerHello {
+  pub(crate) fn with_corrupted_proof(mut self) -> Self {
+    self.proof.domain = FakeProofDomain::ClientFinish;
+    self
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +174,14 @@ pub(crate) struct FakeClientFinish {
   proof: FakeProof,
 }
 
+#[cfg(test)]
+impl FakeClientFinish {
+  pub(crate) fn with_corrupted_proof(mut self) -> Self {
+    self.proof.domain = FakeProofDomain::ServerFinish;
+    self
+  }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FakeServerFinish {
   candidate_id: CandidateId,
@@ -165,6 +189,14 @@ pub(crate) struct FakeServerFinish {
   session_id: SessionId,
   server_identity: PeerIdentity,
   proof: FakeProof,
+}
+
+#[cfg(test)]
+impl FakeServerFinish {
+  pub(crate) fn with_corrupted_proof(mut self) -> Self {
+    self.proof.domain = FakeProofDomain::ClientFinish;
+    self
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,10 +342,10 @@ impl FakeClientCrypto {
   }
 
   fn check_attempt(&self, observed: ClientAttemptId) -> Result<(), CryptoStateError> {
-    if let Some(expected) = self.attempt() {
-      if expected != observed {
-        return Err(CryptoStateError::AttemptIdMismatch { expected, observed });
-      }
+    if let Some(expected) = self.attempt()
+      && expected != observed
+    {
+      return Err(CryptoStateError::AttemptIdMismatch { expected, observed });
     }
     Ok(())
   }
@@ -686,6 +718,15 @@ impl ServerHandshakeCrypto for FakeServerCrypto {
     } else {
       ServerCryptoPhase::Running
     }
+  }
+
+  fn non_secret_status(&self) -> ServerCryptoStatus {
+    ServerCryptoStatus::new(
+      self.phase(),
+      self.pending.len(),
+      self.pending_commit.is_some(),
+      self.established.is_some(),
+    )
   }
 
   fn prepare_server_hello(

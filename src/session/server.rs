@@ -15,11 +15,11 @@ struct ServerCandidate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EstablishedServerSession {
-  metadata: EstablishedSessionMetadata,
-  peer_endpoint: SocketAddr,
-  completed_candidate_id: CandidateId,
-  client_attempt_id: ClientAttemptId,
-  established_at: Instant,
+  pub(crate) metadata: EstablishedSessionMetadata,
+  pub(crate) peer_endpoint: SocketAddr,
+  pub(crate) completed_candidate_id: CandidateId,
+  pub(crate) client_attempt_id: ClientAttemptId,
+  pub(crate) established_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,11 +43,19 @@ pub(crate) enum ServerInboundKind {
   OtherHandshake,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerHelloAdmission {
+  NewCandidate,
+  ExistingCandidate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServerEffect {
   SendServerHello {
     destination: SocketAddr,
     candidate_id: CandidateId,
     client_attempt_id: ClientAttemptId,
+    admission: ServerHelloAdmission,
   },
   SendServerFinish {
     destination: SocketAddr,
@@ -70,17 +78,20 @@ pub(crate) enum ServerEffect {
   AlreadyClosed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ServerReport {
   pub(crate) expired: Vec<ExpiredServerCandidate>,
   pub(crate) effects: Vec<ServerEffect>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExpiredServerCandidate {
   pub(crate) candidate_id: CandidateId,
   pub(crate) source: SocketAddr,
   pub(crate) client_attempt_id: ClientAttemptId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServerDropReason {
   PendingCapacityReached {
     maximum_pending: usize,
@@ -140,6 +151,40 @@ pub(crate) enum ServerOperation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ServerCandidateSnapshot {
+  pub(crate) candidate_id: CandidateId,
+  pub(crate) source: SocketAddr,
+  pub(crate) client_attempt_id: ClientAttemptId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerCandidateAbortOutcome {
+  Removed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerClientFinishDecision {
+  PermitNew {
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+  },
+  PermitDuplicate {
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+    expected_metadata: EstablishedSessionMetadata,
+  },
+  Drop {
+    reason: ServerDropReason,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServerClientFinishPreAuthReport {
+  pub(crate) expired: Vec<ExpiredServerCandidate>,
+  pub(crate) decision: ServerClientFinishDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServerStateError {
   PendingManager {
     operation: ServerOperation,
@@ -168,6 +213,22 @@ pub(crate) enum ServerStateError {
     state: ServerStateName,
     count: usize,
   },
+  CandidateAbortMissing {
+    source: SocketAddr,
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+  },
+  CandidateAbortCandidateMismatch {
+    source: SocketAddr,
+    expected: CandidateId,
+    observed: CandidateId,
+  },
+  CandidateAbortAttemptMismatch {
+    source: SocketAddr,
+    candidate_id: CandidateId,
+    expected: ClientAttemptId,
+    observed: ClientAttemptId,
+  },
 }
 
 impl std::fmt::Display for ServerStateError {
@@ -187,6 +248,7 @@ impl ServerHandshake {
       state: ServerHandshakeState::Listening,
     }
   }
+
   /// Returns the fieldless lifecycle state for diagnostics.
   pub(crate) fn state_name(&self) -> ServerStateName {
     match self.state {
@@ -225,18 +287,20 @@ impl ServerHandshake {
               active_source: session.peer_endpoint,
             },
           }],
-        })
+        });
       }
       _ => (),
     }
 
-    let admission = self.pending.admit(source, now).map_err(|e| {
-      return ServerStateError::PendingManager {
-        operation: ApplyValidClientHello,
-        source: Some(source),
-        error: e,
-      };
-    })?;
+    let admission =
+      self
+        .pending
+        .admit(source, now)
+        .map_err(|e| ServerStateError::PendingManager {
+          operation: ApplyValidClientHello,
+          source: Some(source),
+          error: e,
+        })?;
 
     match admission.outcome {
       Added {
@@ -252,53 +316,119 @@ impl ServerHandshake {
           },
         );
         self.verify_candidate_maps()?;
-        return Ok(ServerReport {
+        Ok(ServerReport {
           expired,
           effects: vec![ServerEffect::SendServerHello {
             destination: source,
             candidate_id,
             client_attempt_id,
-          }],
-        });
-      }
-      AlreadyPending { candidate_id, .. } => {
-        let binding = self.current_candidate(source)?;
-        match binding {
-          Some(val) => {
-            if val.client_attempt_id != client_attempt_id {
-              return Ok(ServerReport {
-                expired,
-                effects: vec![ServerEffect::Dropped {
-                  source,
-                  reason: ServerDropReason::StaleClientAttempt {
-                    expected: val.client_attempt_id,
-                    observed: client_attempt_id,
-                  },
-                }],
-              });
-            }
-          }
-          _ => (),
-        }
-        return Ok(ServerReport {
-          expired,
-          effects: vec![ServerEffect::SendServerHello {
-            destination: source,
-            candidate_id,
-            client_attempt_id,
-          }],
-        });
-      }
-      AtCapacity { maximum_pending } => {
-        return Ok(ServerReport {
-          expired,
-          effects: vec![ServerEffect::Dropped {
-            source,
-            reason: ServerDropReason::PendingCapacityReached { maximum_pending },
+            admission: ServerHelloAdmission::NewCandidate,
           }],
         })
       }
-      AdmissionOutcome::Closed => return Err(ServerStateError::PendingManagerClosedWhileListening),
+      AlreadyPending { candidate_id, .. } => {
+        let binding = self.current_candidate(source)?;
+        if let Some(val) = binding
+          && val.client_attempt_id != client_attempt_id
+        {
+          return Ok(ServerReport {
+            expired,
+            effects: vec![ServerEffect::Dropped {
+              source,
+              reason: ServerDropReason::StaleClientAttempt {
+                expected: val.client_attempt_id,
+                observed: client_attempt_id,
+              },
+            }],
+          });
+        }
+        Ok(ServerReport {
+          expired,
+          effects: vec![ServerEffect::SendServerHello {
+            destination: source,
+            candidate_id,
+            client_attempt_id,
+            admission: ServerHelloAdmission::ExistingCandidate,
+          }],
+        })
+      }
+      AtCapacity { maximum_pending } => Ok(ServerReport {
+        expired,
+        effects: vec![ServerEffect::Dropped {
+          source,
+          reason: ServerDropReason::PendingCapacityReached { maximum_pending },
+        }],
+      }),
+      AdmissionOutcome::Closed => Err(ServerStateError::PendingManagerClosedWhileListening),
+    }
+  }
+
+  pub(crate) fn precheck_client_finish(
+    &mut self,
+    source: SocketAddr,
+    attempt: ClientAttemptId,
+    now: Instant,
+  ) -> Result<ServerClientFinishPreAuthReport, ServerStateError> {
+    let timeout_report = self.check_timeouts(now)?;
+
+    match self.state {
+      ServerHandshakeState::Closed => Ok(ServerClientFinishPreAuthReport {
+        expired: timeout_report.expired,
+        decision: ServerClientFinishDecision::Drop {
+          reason: ServerDropReason::SessionUnavailable,
+        },
+      }),
+      ServerHandshakeState::Established { session } => {
+        if source == session.peer_endpoint && attempt == session.client_attempt_id {
+          return Ok(ServerClientFinishPreAuthReport {
+            expired: timeout_report.expired,
+            decision: ServerClientFinishDecision::PermitDuplicate {
+              candidate_id: session.completed_candidate_id,
+              client_attempt_id: session.client_attempt_id,
+              expected_metadata: session.metadata,
+            },
+          });
+        }
+
+        Ok(ServerClientFinishPreAuthReport {
+          expired: timeout_report.expired,
+          decision: ServerClientFinishDecision::Drop {
+            reason: ServerDropReason::AnotherPeerIsActive {
+              active_source: session.peer_endpoint,
+            },
+          },
+        })
+      }
+      ServerHandshakeState::Listening => {
+        let Some(candidate) = self.candidate_owned_by(source)? else {
+          return Ok(ServerClientFinishPreAuthReport {
+            expired: timeout_report.expired,
+            decision: ServerClientFinishDecision::Drop {
+              reason: ServerDropReason::NoPendingCandidate,
+            },
+          });
+        };
+
+        if attempt != candidate.client_attempt_id {
+          return Ok(ServerClientFinishPreAuthReport {
+            expired: timeout_report.expired,
+            decision: ServerClientFinishDecision::Drop {
+              reason: ServerDropReason::StaleClientAttempt {
+                expected: candidate.client_attempt_id,
+                observed: attempt,
+              },
+            },
+          });
+        }
+
+        Ok(ServerClientFinishPreAuthReport {
+          expired: timeout_report.expired,
+          decision: ServerClientFinishDecision::PermitNew {
+            candidate_id: candidate.candidate_id,
+            client_attempt_id: candidate.client_attempt_id,
+          },
+        })
+      }
     }
   }
 
@@ -500,15 +630,13 @@ impl ServerHandshake {
   ) -> Result<ServerReport, ServerStateError> {
     let expired = self.expire_and_reconcile(now)?;
     match self.state {
-      ServerHandshakeState::Closed => {
-        return Ok(ServerReport {
-          expired,
-          effects: vec![ServerEffect::Dropped {
-            source,
-            reason: ServerDropReason::SessionUnavailable,
-          }],
-        });
-      }
+      ServerHandshakeState::Closed => Ok(ServerReport {
+        expired,
+        effects: vec![ServerEffect::Dropped {
+          source,
+          reason: ServerDropReason::SessionUnavailable,
+        }],
+      }),
       ServerHandshakeState::Listening => {
         let reason: ServerDropReason;
         if observed == ServerInboundKind::Data {
@@ -525,27 +653,26 @@ impl ServerHandshake {
           };
         }
 
-        return Ok(ServerReport {
+        Ok(ServerReport {
           expired,
           effects: vec![ServerEffect::Dropped { source, reason }],
-        });
+        })
       }
       ServerHandshakeState::Established { session } => {
-        let reason: ServerDropReason;
-        if source != session.peer_endpoint {
-          reason = ServerDropReason::AnotherPeerIsActive {
+        let reason = if source != session.peer_endpoint {
+          ServerDropReason::AnotherPeerIsActive {
             active_source: session.peer_endpoint,
-          };
+          }
         } else {
-          reason = ServerDropReason::UnexpectedMessage {
+          ServerDropReason::UnexpectedMessage {
             expected: Some(ServerInboundKind::Data),
             observed,
-          };
-        }
-        return Ok(ServerReport {
+          }
+        };
+        Ok(ServerReport {
           expired,
           effects: vec![ServerEffect::Dropped { source, reason }],
-        });
+        })
       }
     }
   }
@@ -566,8 +693,8 @@ impl ServerHandshake {
     session_id: SessionId,
   ) -> ServerDataDecision {
     match self.state {
-      ServerHandshakeState::Listening => return ServerDataDecision::RejectPreSession,
-      ServerHandshakeState::Closed => return ServerDataDecision::RejectClosed,
+      ServerHandshakeState::Listening => ServerDataDecision::RejectPreSession,
+      ServerHandshakeState::Closed => ServerDataDecision::RejectClosed,
       ServerHandshakeState::Established { session } => {
         if source != session.peer_endpoint {
           return ServerDataDecision::RejectUnexpectedSource {
@@ -581,15 +708,15 @@ impl ServerHandshake {
             observed: session_id,
           };
         }
-        return ServerDataDecision::PermitEstablished { session_id };
+        ServerDataDecision::PermitEstablished { session_id }
       }
     }
   }
   /// Returns the nearest pending deadline while the server is listening.
   pub(crate) fn next_deadline(&self) -> Option<Instant> {
     match self.state {
-      ServerHandshakeState::Listening => return self.pending.next_deadline(),
-      _ => return None,
+      ServerHandshakeState::Listening => self.pending.next_deadline(),
+      _ => None,
     }
   }
   /// Clears pending and established state and enters the terminal closed state.
@@ -607,13 +734,13 @@ impl ServerHandshake {
     self.pending.shutdown();
     self.candidate_by_id.clear();
     self.state = ServerHandshakeState::Closed;
-    return Ok(ServerReport {
+    Ok(ServerReport {
       expired: vec![],
       effects: vec![ServerEffect::Closed {
         removed_candidates,
         removed_session,
       }],
-    });
+    })
   }
 
   /// Expires manager candidates and reconciles the server attempt registry.
@@ -673,7 +800,7 @@ impl ServerHandshake {
     let Some(binding) = self.candidate_by_id.get(&snapshot.candidate_id) else {
       return Err(ServerStateError::CandidateRegistryMissing {
         candidate_id: snapshot.candidate_id,
-        source: source,
+        source,
       });
     };
     if binding.source != source {
@@ -683,7 +810,7 @@ impl ServerHandshake {
         registry_source: binding.source,
       });
     }
-    Ok(Some((*binding).clone()))
+    Ok(Some(*binding))
   }
   /// Removes one candidate from both the manager and registry after exact checks.
   fn remove_exact_candidate(&mut self, candidate: ServerCandidate) -> Result<(), ServerStateError> {
@@ -696,7 +823,7 @@ impl ServerHandshake {
         return Err(ServerStateError::CandidateRegistryOrphaned {
           candidate_id: candidate.candidate_id,
           source: candidate.source,
-        })
+        });
       }
       CandidateRemoval::CandidateMismatch {
         expected: _,
@@ -705,7 +832,7 @@ impl ServerHandshake {
         return Err(ServerStateError::CandidateRegistryOrphaned {
           candidate_id: observed,
           source: candidate.source,
-        })
+        });
       }
       CandidateRemoval::Closed => return Err(ServerStateError::PendingManagerClosedWhileListening),
     }
@@ -755,6 +882,61 @@ impl ServerHandshake {
     }
 
     Ok(())
+  }
+
+  pub(crate) fn candidate_owned_by(
+    &self,
+    source: SocketAddr,
+  ) -> Result<Option<ServerCandidateSnapshot>, ServerStateError> {
+    let Some(candidate) = self.current_candidate(source)? else {
+      return Ok(None);
+    };
+
+    Ok(Some(ServerCandidateSnapshot {
+      candidate_id: candidate.candidate_id,
+      source: candidate.source,
+      client_attempt_id: candidate.client_attempt_id,
+    }))
+  }
+
+  pub(crate) fn pending_candidate_count(&self) -> usize {
+    self.pending.pending_count()
+  }
+
+  pub(crate) fn abort_exact_candidate(
+    &mut self,
+    source: SocketAddr,
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+  ) -> Result<ServerCandidateAbortOutcome, ServerStateError> {
+    let Some(candidate) = self.current_candidate(source)? else {
+      return Err(ServerStateError::CandidateAbortMissing {
+        source,
+        candidate_id,
+        client_attempt_id,
+      });
+    };
+
+    if candidate.candidate_id != candidate_id {
+      return Err(ServerStateError::CandidateAbortCandidateMismatch {
+        source,
+        expected: candidate.candidate_id,
+        observed: candidate_id,
+      });
+    }
+
+    if candidate.client_attempt_id != client_attempt_id {
+      return Err(ServerStateError::CandidateAbortAttemptMismatch {
+        source,
+        candidate_id,
+        expected: candidate.client_attempt_id,
+        observed: client_attempt_id,
+      });
+    }
+
+    self.remove_exact_candidate(candidate)?;
+    self.verify_candidate_maps()?;
+    Ok(ServerCandidateAbortOutcome::Removed)
   }
 }
 
@@ -825,6 +1007,131 @@ mod tests {
       [ServerEffect::SendServerHello { candidate_id: observed, client_attempt_id: ClientAttemptId(1), .. }] if *observed == candidate_id
     ));
     assert_eq!(server.next_deadline(), Some(deadline));
+  }
+
+  #[test]
+  fn precheck_client_finish_permits_exact_pending_candidate() {
+    let mut server = ServerHandshake::new(policy(1));
+    let start = Instant::now();
+    let peer = source(4000);
+    let candidate_id = hello(&mut server, peer, start);
+
+    let report = server
+      .precheck_client_finish(peer, ClientAttemptId(1), start + Duration::from_secs(1))
+      .unwrap();
+
+    assert!(report.expired.is_empty());
+    assert!(matches!(
+      report.decision,
+      ServerClientFinishDecision::PermitNew {
+        candidate_id: observed_candidate,
+        client_attempt_id: ClientAttemptId(1),
+      } if observed_candidate == candidate_id
+    ));
+  }
+
+  #[test]
+  fn precheck_client_finish_rejects_missing_stale_and_expired_candidates() {
+    let mut server = ServerHandshake::new(policy(1));
+    let start = Instant::now();
+    let peer = source(4000);
+    let candidate_id = hello(&mut server, peer, start);
+
+    let missing = server
+      .precheck_client_finish(source(4001), ClientAttemptId(1), start)
+      .unwrap();
+    assert!(matches!(
+      missing.decision,
+      ServerClientFinishDecision::Drop {
+        reason: ServerDropReason::NoPendingCandidate,
+      }
+    ));
+
+    let stale = server
+      .precheck_client_finish(peer, ClientAttemptId(2), start)
+      .unwrap();
+    assert!(matches!(
+      stale.decision,
+      ServerClientFinishDecision::Drop {
+        reason: ServerDropReason::StaleClientAttempt {
+          expected: ClientAttemptId(1),
+          observed: ClientAttemptId(2),
+        },
+      }
+    ));
+    assert_eq!(server.pending_candidate_count(), 1);
+
+    let deadline = server.next_deadline().unwrap();
+    let expired = server
+      .precheck_client_finish(peer, ClientAttemptId(1), deadline)
+      .unwrap();
+    assert!(matches!(
+      expired.expired.as_slice(),
+      [ExpiredServerCandidate {
+        candidate_id: observed_candidate,
+        source: observed_source,
+        client_attempt_id: ClientAttemptId(1),
+      }] if *observed_candidate == candidate_id && *observed_source == peer
+    ));
+    assert!(matches!(
+      expired.decision,
+      ServerClientFinishDecision::Drop {
+        reason: ServerDropReason::NoPendingCandidate,
+      }
+    ));
+    assert_eq!(server.pending_candidate_count(), 0);
+  }
+
+  #[test]
+  fn precheck_client_finish_handles_established_and_closed_states() {
+    let mut server = ServerHandshake::new(policy(1));
+    let start = Instant::now();
+    let peer = source(4000);
+    let candidate_id = hello(&mut server, peer, start);
+    let session_metadata = metadata(9);
+    server
+      .handle_authenticated_client_finish(
+        peer,
+        candidate_id,
+        ClientAttemptId(1),
+        session_metadata,
+        start + Duration::from_secs(1),
+      )
+      .unwrap();
+
+    let duplicate = server
+      .precheck_client_finish(peer, ClientAttemptId(1), start + Duration::from_secs(2))
+      .unwrap();
+    assert!(duplicate.expired.is_empty());
+    assert!(matches!(
+      duplicate.decision,
+      ServerClientFinishDecision::PermitDuplicate {
+        candidate_id: observed_candidate,
+        client_attempt_id: ClientAttemptId(1),
+        expected_metadata,
+      } if observed_candidate == candidate_id && expected_metadata == session_metadata
+    ));
+
+    let another_peer = server
+      .precheck_client_finish(source(4001), ClientAttemptId(1), start)
+      .unwrap();
+    assert!(matches!(
+      another_peer.decision,
+      ServerClientFinishDecision::Drop {
+        reason: ServerDropReason::AnotherPeerIsActive { active_source },
+      } if active_source == peer
+    ));
+
+    server.shutdown().unwrap();
+    let closed = server
+      .precheck_client_finish(peer, ClientAttemptId(1), start)
+      .unwrap();
+    assert!(matches!(
+      closed.decision,
+      ServerClientFinishDecision::Drop {
+        reason: ServerDropReason::SessionUnavailable,
+      }
+    ));
   }
 
   #[test]
@@ -905,6 +1212,47 @@ mod tests {
         ..
       }]
     ));
+  }
+
+  #[test]
+  fn abort_exact_candidate_rejects_mismatches_before_removal() {
+    let mut server = ServerHandshake::new(policy(1));
+    let start = Instant::now();
+    let peer = source(4000);
+    let other_peer = source(4001);
+    let candidate_id = hello(&mut server, peer, start);
+    let wrong_candidate = CandidateId(candidate_id.0 + 1);
+
+    assert!(matches!(
+      server.abort_exact_candidate(other_peer, candidate_id, ClientAttemptId(1)),
+      Err(ServerStateError::CandidateAbortMissing { source, .. }) if source == other_peer
+    ));
+    assert!(matches!(
+      server.abort_exact_candidate(peer, wrong_candidate, ClientAttemptId(1)),
+      Err(ServerStateError::CandidateAbortCandidateMismatch {
+        expected,
+        observed,
+        ..
+      }) if expected == candidate_id && observed == wrong_candidate
+    ));
+    assert!(matches!(
+      server.abort_exact_candidate(peer, candidate_id, ClientAttemptId(2)),
+      Err(ServerStateError::CandidateAbortAttemptMismatch {
+        expected: ClientAttemptId(1),
+        observed: ClientAttemptId(2),
+        ..
+      })
+    ));
+    assert_eq!(server.pending_candidate_count(), 1);
+
+    assert_eq!(
+      server
+        .abort_exact_candidate(peer, candidate_id, ClientAttemptId(1))
+        .unwrap(),
+      ServerCandidateAbortOutcome::Removed
+    );
+    assert_eq!(server.pending_candidate_count(), 0);
+    assert!(server.candidate_owned_by(peer).unwrap().is_none());
   }
 
   #[test]

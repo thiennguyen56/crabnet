@@ -5,9 +5,10 @@
 These do not create a TUN device or network namespace:
 
 ```bash
-cargo test
 cargo fmt --all -- --check
+cargo test
 cargo clippy --all-targets --all-features -- -D warnings
+cargo build
 ```
 
 Firewall diagnostic unit tests use fake inspectors and command runners. They
@@ -20,13 +21,44 @@ MTU boundaries, undersized output buffers, malformed headers, unsupported
 fields, and declared-length mismatches. Server state tests prove that only a
 valid decoded frame can register the first peer.
 
-Pending-session policy tests cover configuration rejection, duplicate ownership, bounded
-capacity, exact expiration, capacity release, monotonic identifier exhaustion, and idempotent
-shutdown. Pure client-handshake tests cover authenticated-result ordering, per-phase deadlines,
-stale attempts, unexpected sources and messages, pre-session data rejection, authentication
-failure, local error context, establishment, and terminal shutdown. All time is supplied by the
-tests; they do not sleep or require sockets. These policies are not connected to the current
-version 1 runtime and do not prove authentication or encryption.
+Pending-session policy tests cover configuration rejection, duplicate ownership, bounded capacity,
+exact expiration, capacity release, monotonic identifier exhaustion, and idempotent shutdown.
+
+Pure handshake coverage is split by responsibility:
+
+- policy tests cover source/attempt authorization, candidates, deadlines, lifecycle, data
+  decisions, duplicates, and exact cleanup;
+- fake-crypto tests cover transcript phases, remote authentication failure, multiple server
+  candidates, explicit commit, exact context removal, shutdown, and ID exhaustion;
+- client coordinator tests cover both receive methods, precheck-before-crypto ordering, terminal
+  remote failure, timeout, commit, shutdown from every stable phase, malformed result domains and
+  correlations, and injected local errors;
+- server coordinator tests cover ClientHello admission/replay/capacity/expiration, ClientFinish
+  establishment and duplicate confirmation, candidate-scoped remote failure, cleanup dispositions,
+  timeout reconciliation, shutdown, and injected transaction failures; and
+- the in-memory driver transfers all four owned messages and proves matching session IDs with
+  opposite authenticated peer identities.
+
+All handshake time is supplied as `Instant`; these tests do not sleep or require sockets. Payload
+and credential debug-redaction tests ensure generic diagnostics do not reveal provider values.
+These policies and coordinators are not connected to version 1 runtime and do not prove real
+authentication or encryption.
+
+## Choosing the right test
+
+| Change | Minimum focused test |
+| --- | --- |
+| Packet framing or MTU boundary | `cargo test protocol::tests` |
+| Candidate/session policy | `cargo test session::` |
+| Fake provider transcript | `cargo test crypto::fake::tests` |
+| Client coordinator | `cargo test handshake::client::tests` |
+| Server coordinator | `cargo test handshake::server::tests` |
+| Complete pure handshake | `cargo test handshake::tests` |
+| Route/NAT/firewall pure logic | Relevant module tests with fake backends |
+| Runtime namespace behavior | Privileged script after explicit authorization |
+
+Before declaring a change complete, still run the complete unprivileged gate set because
+cross-module invariants can compile and fail outside the focused test.
 
 ## Privileged routed test
 
@@ -51,7 +83,7 @@ translation.
 
 Successful traffic proves that both Crabnet endpoints agree on the current
 frame format. It does not test authentication, encryption, or replay
-protection.
+protection, and it does not execute the pure handshake coordinators.
 
 The default route and NAT table exist only inside their test namespaces. The
 script never changes the host default route, forwarding state, or firewall.

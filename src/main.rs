@@ -8,19 +8,26 @@
 mod application;
 mod client;
 mod config;
-#[cfg_attr(
-  not(test),
-  expect(
-    dead_code,
-    reason = "milestone 2.2 defines pure session policy before runtime integration"
-  )
+#[allow(
+  dead_code,
+  reason = "the pure crypto boundary is intentionally not runtime-integrated yet"
 )]
 mod crypto;
 mod firewall;
+#[allow(
+  dead_code,
+  clippy::result_large_err,
+  reason = "milestone 2.3 keeps rich typed errors before runtime integration"
+)]
+mod handshake;
 mod nat;
 mod protocol;
 mod routing;
 mod server;
+#[allow(
+  dead_code,
+  reason = "the pure session policy is intentionally not runtime-integrated yet"
+)]
 mod session;
 mod tun;
 

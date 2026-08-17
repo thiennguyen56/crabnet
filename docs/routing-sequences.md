@@ -5,6 +5,10 @@ internet-facing path. The private-service test covers full-tunnel selection,
 server routing, IPv4 forwarding, and source NAT. General internet use remains
 future work because firewall policy and full-tunnel DNS are not managed.
 
+Both packet-path diagrams show the active unauthenticated version 1 runtime. The completed pure
+handshake is not a preceding runtime step yet, so the diagrams must not be read as authenticated or
+encrypted tunnels.
+
 ## Private service routing
 
 ```mermaid
@@ -90,4 +94,6 @@ path requires:
 
 - administrator-managed firewall forwarding policy;
 - full-tunnel DNS handling; and
-- authentication and encryption before use on untrusted networks.
+- a reviewed version 2 handshake and encrypted data protocol;
+- runtime integration that gates forwarding on established session metadata; and
+- authentication, replay protection, and rekeying before use on untrusted networks.

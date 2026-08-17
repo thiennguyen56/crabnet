@@ -59,7 +59,6 @@ impl ClientHandshakeState {
 
   /// Returns the structurally expected inbound message for the current state.
   /// Returns the message kind structurally expected in this state.
-  /// Returns the message kind structurally expected in this state.
   const fn expected_inbound(&self) -> Option<ClientInboundKind> {
     match self {
       Self::AwaitingServerHello { .. } => Some(ClientInboundKind::ServerHello),
@@ -96,6 +95,11 @@ impl ClientHandshake {
     })
   }
 
+  /// Returns a fieldless diagnostic name for the current policy state.
+  pub(crate) const fn state_name(&self) -> ClientStateName {
+    self.state.name()
+  }
+
   /// Starts one fresh attempt from the idle state.
   pub(crate) fn start(&mut self, now: Instant) -> Result<ClientAction, ClientStateError> {
     if !matches!(self.state, ClientHandshakeState::Idle) {
@@ -120,6 +124,84 @@ impl ClientHandshake {
     };
 
     Ok(ClientAction::SendClientHello { attempt_id })
+  }
+
+  /// Authorizes an inbound server handshake message before crypto processes its payload.
+  ///
+  /// Source authorization takes precedence over all attempt-state checks. Reaching the exact
+  /// phase deadline closes the policy and reports the locally trusted current attempt.
+  pub(crate) fn precheck(
+    &mut self,
+    source: SocketAddr,
+    attempt: ClientAttemptId,
+    kind: ClientPreAuthKind,
+    now: Instant,
+  ) -> ClientPreAuthDecision {
+    if source != self.server_endpoint {
+      return ClientPreAuthDecision::Drop {
+        reason: ClientDropReason::UnexpectedSource {
+          expected: self.server_endpoint,
+          observed: source,
+        },
+      };
+    }
+
+    let observed = match kind {
+      ClientPreAuthKind::ServerHello => ClientInboundKind::ServerHello,
+      ClientPreAuthKind::ServerFinish => ClientInboundKind::ServerFinish,
+    };
+
+    let (current_attempt_id, deadline, expected) = match &self.state {
+      ClientHandshakeState::AwaitingServerHello {
+        attempt_id,
+        deadline,
+        ..
+      } => (*attempt_id, *deadline, ClientInboundKind::ServerHello),
+      ClientHandshakeState::AwaitingServerFinish {
+        attempt_id,
+        deadline,
+        ..
+      } => (*attempt_id, *deadline, ClientInboundKind::ServerFinish),
+      ClientHandshakeState::Idle
+      | ClientHandshakeState::Established { .. }
+      | ClientHandshakeState::Closed => {
+        return ClientPreAuthDecision::Drop {
+          reason: ClientDropReason::UnexpectedMessage {
+            expected: None,
+            observed,
+          },
+        };
+      }
+    };
+
+    if now >= deadline {
+      self.state = ClientHandshakeState::Closed;
+      return ClientPreAuthDecision::Timeout {
+        attempt_id: current_attempt_id,
+      };
+    }
+
+    if observed != expected {
+      return ClientPreAuthDecision::Drop {
+        reason: ClientDropReason::UnexpectedMessage {
+          expected: Some(expected),
+          observed,
+        },
+      };
+    }
+
+    if attempt != current_attempt_id {
+      return ClientPreAuthDecision::Drop {
+        reason: ClientDropReason::StaleAttempt {
+          expected: current_attempt_id,
+          observed: attempt,
+        },
+      };
+    }
+
+    ClientPreAuthDecision::Permit {
+      attempt_id: current_attempt_id,
+    }
   }
 
   /// Applies a server hello that a future crypto boundary authenticated.
@@ -399,7 +481,7 @@ impl fmt::Display for ClientHandshakeConfigError {
 impl Error for ClientHandshakeConfigError {}
 
 /// Owned instruction returned to a future async runtime.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum ClientAction {
   /// Prepare and send a client hello for this attempt.
   SendClientHello { attempt_id: ClientAttemptId },
@@ -460,6 +542,26 @@ pub(crate) enum ClientInboundKind {
   Data,
   /// Other structurally valid handshake message.
   OtherHandshake,
+}
+
+/// Handshake message kinds accepted by the client pre-auth policy check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientPreAuthKind {
+  /// Server response to the current client hello.
+  ServerHello,
+  /// Server confirmation for the current client finish.
+  ServerFinish,
+}
+
+/// Policy decision made before an inbound handshake payload reaches crypto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClientPreAuthDecision {
+  /// The source, message kind, attempt, and deadline authorize crypto processing.
+  Permit { attempt_id: ClientAttemptId },
+  /// Remote input was deliberately rejected without advancing the handshake.
+  Drop { reason: ClientDropReason },
+  /// The exact phase deadline closed the current attempt.
+  Timeout { attempt_id: ClientAttemptId },
 }
 
 /// Local client state-machine failure.
@@ -634,6 +736,104 @@ mod tests {
         state: ClientStateName::AwaitingServerHello,
       })
     );
+  }
+
+  #[test]
+  fn precheck_permits_expected_server_hello() {
+    let mut client = client();
+    let now = Instant::now();
+    let attempt_id = start(&mut client, now);
+
+    assert_eq!(
+      client.precheck(server(), attempt_id, ClientPreAuthKind::ServerHello, now),
+      ClientPreAuthDecision::Permit { attempt_id }
+    );
+    assert_eq!(client.state.name(), ClientStateName::AwaitingServerHello);
+  }
+
+  #[test]
+  fn precheck_rejects_unexpected_source_before_timeout() {
+    let mut client = client();
+    let now = Instant::now();
+    let attempt_id = start(&mut client, now);
+
+    assert_eq!(
+      client.precheck(
+        other_server(),
+        attempt_id,
+        ClientPreAuthKind::ServerHello,
+        now + TIMEOUT,
+      ),
+      ClientPreAuthDecision::Drop {
+        reason: ClientDropReason::UnexpectedSource {
+          expected: server(),
+          observed: other_server(),
+        },
+      }
+    );
+    assert_eq!(client.state.name(), ClientStateName::AwaitingServerHello);
+  }
+
+  #[test]
+  fn precheck_at_deadline_closes_and_returns_current_attempt() {
+    let mut client = client();
+    let now = Instant::now();
+    let current = start(&mut client, now);
+
+    assert_eq!(
+      client.precheck(
+        server(),
+        ClientAttemptId(99),
+        ClientPreAuthKind::ServerFinish,
+        now + TIMEOUT,
+      ),
+      ClientPreAuthDecision::Timeout {
+        attempt_id: current,
+      }
+    );
+    assert_eq!(client.state.name(), ClientStateName::Closed);
+  }
+
+  #[test]
+  fn precheck_rejects_wrong_kind_before_stale_attempt() {
+    let mut client = client();
+    let now = Instant::now();
+    start(&mut client, now);
+
+    assert_eq!(
+      client.precheck(
+        server(),
+        ClientAttemptId(99),
+        ClientPreAuthKind::ServerFinish,
+        now,
+      ),
+      ClientPreAuthDecision::Drop {
+        reason: ClientDropReason::UnexpectedMessage {
+          expected: Some(ClientInboundKind::ServerHello),
+          observed: ClientInboundKind::ServerFinish,
+        },
+      }
+    );
+    assert_eq!(client.state.name(), ClientStateName::AwaitingServerHello);
+  }
+
+  #[test]
+  fn precheck_rejects_stale_attempt_without_advancing() {
+    let mut client = client();
+    let now = Instant::now();
+    let current = start(&mut client, now);
+    let stale = ClientAttemptId(99);
+
+    assert_eq!(
+      client.precheck(server(), stale, ClientPreAuthKind::ServerHello, now),
+      ClientPreAuthDecision::Drop {
+        reason: ClientDropReason::StaleAttempt {
+          expected: current,
+          observed: stale,
+        },
+      }
+    );
+    assert_eq!(client.state.name(), ClientStateName::AwaitingServerHello);
   }
 
   #[test]

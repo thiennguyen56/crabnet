@@ -6,10 +6,20 @@ use crate::session::types::{ClientAttemptId, EstablishedSessionMetadata, Session
 use crate::session::CandidateId;
 
 /// ClientHello payload prepared for one client attempt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PreparedClientHello<P> {
   attempt_id: ClientAttemptId,
   payload: P,
+}
+
+impl<P> fmt::Debug for PreparedClientHello<P> {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("PreparedClientHello")
+      .field("attempt_id", &self.attempt_id)
+      .field("payload", &"<opaque>")
+      .finish()
+  }
 }
 
 impl<P> PreparedClientHello<P> {
@@ -31,14 +41,30 @@ impl<P> PreparedClientHello<P> {
   pub(crate) fn into_payload(self) -> P {
     self.payload
   }
+
+  #[cfg(test)]
+  pub(crate) fn for_test(attempt_id: ClientAttemptId, payload: P) -> Self {
+    Self::new(attempt_id, payload)
+  }
 }
 
 /// ServerHello payload bound to an admitted server candidate.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PreparedServerHello<P> {
   candidate_id: CandidateId,
   client_attempt_id: ClientAttemptId,
   payload: P,
+}
+
+impl<P> fmt::Debug for PreparedServerHello<P> {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("PreparedServerHello")
+      .field("candidate_id", &self.candidate_id)
+      .field("client_attempt_id", &self.client_attempt_id)
+      .field("payload", &"<opaque>")
+      .finish()
+  }
 }
 
 impl<P> PreparedServerHello<P> {
@@ -69,13 +95,32 @@ impl<P> PreparedServerHello<P> {
   pub(crate) fn into_payload(self) -> P {
     self.payload
   }
+
+  #[cfg(test)]
+  pub(crate) fn for_test(
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+    payload: P,
+  ) -> Self {
+    Self::new(candidate_id, client_attempt_id, payload)
+  }
 }
 
 /// ClientFinish payload prepared for an authenticated server hello.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PreparedClientFinish<P> {
   attempt_id: ClientAttemptId,
   payload: P,
+}
+
+impl<P> fmt::Debug for PreparedClientFinish<P> {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("PreparedClientFinish")
+      .field("attempt_id", &self.attempt_id)
+      .field("payload", &"<opaque>")
+      .finish()
+  }
 }
 
 impl<P> PreparedClientFinish<P> {
@@ -97,15 +142,32 @@ impl<P> PreparedClientFinish<P> {
   pub(crate) fn into_payload(self) -> P {
     self.payload
   }
+
+  #[cfg(test)]
+  pub(crate) fn for_test(attempt_id: ClientAttemptId, payload: P) -> Self {
+    Self::new(attempt_id, payload)
+  }
 }
 
 /// ServerFinish payload prepared for one committed authenticated session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PreparedServerFinish<P> {
   candidate_id: CandidateId,
   client_attempt_id: ClientAttemptId,
   session_id: SessionId,
   payload: P,
+}
+
+impl<P> fmt::Debug for PreparedServerFinish<P> {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("PreparedServerFinish")
+      .field("candidate_id", &self.candidate_id)
+      .field("client_attempt_id", &self.client_attempt_id)
+      .field("session_id", &self.session_id)
+      .field("payload", &"<opaque>")
+      .finish()
+  }
 }
 
 impl<P> PreparedServerFinish<P> {
@@ -142,6 +204,16 @@ impl<P> PreparedServerFinish<P> {
   pub(crate) fn into_payload(self) -> P {
     self.payload
   }
+
+  #[cfg(test)]
+  pub(crate) fn for_test(
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+    session_id: SessionId,
+    payload: P,
+  ) -> Self {
+    Self::new(candidate_id, client_attempt_id, session_id, payload)
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +226,11 @@ impl AuthenticatedServerHello {
   }
   pub(crate) const fn attempt_id(&self) -> ClientAttemptId {
     self.attempt_id
+  }
+
+  #[cfg(test)]
+  pub(crate) const fn for_test(attempt_id: ClientAttemptId) -> Self {
+    Self::new(attempt_id)
   }
 }
 
@@ -184,6 +261,15 @@ impl AuthenticatedClientFinish {
   pub(crate) const fn metadata(&self) -> EstablishedSessionMetadata {
     self.metadata
   }
+
+  #[cfg(test)]
+  pub(crate) const fn for_test(
+    candidate_id: CandidateId,
+    client_attempt_id: ClientAttemptId,
+    metadata: EstablishedSessionMetadata,
+  ) -> Self {
+    Self::new(candidate_id, client_attempt_id, metadata)
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +292,14 @@ impl AuthenticatedServerFinish {
   }
   pub(crate) const fn metadata(&self) -> EstablishedSessionMetadata {
     self.metadata
+  }
+
+  #[cfg(test)]
+  pub(crate) const fn for_test(
+    attempt_id: ClientAttemptId,
+    metadata: EstablishedSessionMetadata,
+  ) -> Self {
+    Self::new(attempt_id, metadata)
   }
 }
 
@@ -331,4 +425,26 @@ pub(crate) struct CryptoShutdownOutcome {
   pub(crate) removed_pending_commit: bool,
   pub(crate) removed_established_context: bool,
   pub(crate) already_closed: bool,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  struct SecretPayload;
+
+  impl fmt::Debug for SecretPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+      formatter.write_str("SECRET_PAYLOAD")
+    }
+  }
+
+  #[test]
+  fn prepared_value_debug_redacts_opaque_payloads() {
+    let prepared = PreparedClientHello::new(ClientAttemptId(7), SecretPayload);
+    let rendered = format!("{prepared:?}");
+
+    assert!(rendered.contains("<opaque>"));
+    assert!(!rendered.contains("SECRET_PAYLOAD"));
+  }
 }

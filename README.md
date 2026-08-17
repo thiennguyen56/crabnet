@@ -5,20 +5,37 @@
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
 versioned packet framing, client split/full-tunnel routes, server IPv4
-forwarding, and IPv4 masquerading.
+forwarding, and IPv4 masquerading. A transport-neutral four-message handshake
+using deterministic fake crypto is also complete and thoroughly tested, but it
+is not connected to the UDP runtime and provides no live security.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Current service diagrams](docs/diagrams.md)
+- [Pure handshake learning guide](docs/handshake.md)
 - [Configuration reference](docs/configuration.md)
 - [Testing](docs/testing.md)
 - [Current protocol](docs/protocol.md)
 - [Security limitations](docs/security-limitations.md)
 - [Routing sequence diagrams](docs/routing-sequences.md)
+- [Milestone 2.3 exhaustive design](docs/milestone-2.3-pure-handshake-coordination-design.md)
 
-`docs/STAGE1.md`, `docs/STAGE1_MINOBOOK.md`, and `docs/milestones1.md` are
-learning notes and historical planning documents; the files above describe the
-current implementation.
+## Current milestone status
+
+| Area | Status | Meaning |
+| --- | --- | --- |
+| Version 1 TUN/UDP forwarding | Active runtime | Moves raw IP packets in framed UDP datagrams |
+| Routes, forwarding diagnostics, and IPv4 NAT | Active runtime | Linux lab functionality with ownership-aware cleanup |
+| Session policy and fake crypto traits | Complete pure subsystem | Synchronous and testable without sockets or privileges |
+| Milestone 2.3 handshake coordination | Complete pure subsystem | Four fake handshake messages establish matching metadata |
+| Authenticated wire protocol and runtime integration | Not implemented | No handshake bytes, real crypto, or data-session binding |
+| Production VPN security | Not implemented | No encryption, replay protection, rekeying, or DNS handling |
+
+Use [the handshake guide](docs/handshake.md) to understand the new state machines and coordinator
+before reading the exhaustive milestone document. The next milestone must choose a reviewed
+protocol/library and define version 2 wire and configuration semantics before touching the UDP
+runtime.
 
 ## Why Crabnet?
 
@@ -28,7 +45,7 @@ testable so the tunnel can be built incrementally.
 
 ## Container image
 
-Build the small production image with the locked dependency versions:
+Build the small runtime image with the locked dependency versions:
 
 ```bash
 docker build --tag crabnet:local .

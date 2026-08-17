@@ -3,6 +3,30 @@
 Configuration is TOML. The sample files are in `config/client/config.toml` and
 `config/server/config.toml`.
 
+The executable currently has no handshake, identity, credential, or key configuration. Milestone
+2.3 uses values constructed directly in pure tests; adding fake credentials to TOML would create a
+misleading security boundary. A future version 2 configuration must be designed with the selected
+reviewed protocol or library.
+
+## Loading and CLI overrides
+
+`--config-path PATH` loads a complete TOML file. Without it, Crabnet starts from built-in client
+defaults. The following CLI values override either source:
+
+| CLI option | Effective field |
+| --- | --- |
+| `--mode client|server` | `[mode].type` |
+| `--local-addr`, `--local-port` | local `[mode].bind_addr` components |
+| `--remote-addr`, `--remote-port` | client `[mode].server_addr` components |
+| `--tun` | `tun.name` |
+| `--tun-address` | `tun.address` |
+| `--tun-prefix-len` | `tun.prefix_len` |
+| `--tun-mtu` | `tun.mtu` |
+| `--log-level` | `log_level` |
+
+Routing settings currently come from TOML rather than individual CLI flags. Validation runs after
+all overrides are merged.
+
 ## Common fields
 
 ```toml
@@ -80,6 +104,15 @@ enable_nat = true
 nat_egress_interface = "cn-srv-back"
 ```
 
+Each `server_routes` entry requires `destination` and may specify `gateway`, `interface`, or both:
+
+```toml
+server_routes = [
+  { destination = "10.10.0.0/24", gateway = "172.16.0.2" },
+  { destination = "10.20.0.0/24", interface = "eth1" }
+]
+```
+
 `enable_nat` is server-only and currently supports IPv4. It requires
 `enable_forwarding = true`, a non-default TUN prefix, and an explicit
 `nat_egress_interface` different from the TUN name. The egress interface
@@ -94,3 +127,25 @@ only if it still matches the state installed at startup.
 
 NAT does not configure DNS or host firewall policy. A restrictive firewall
 may still require administrator-managed forwarding rules.
+
+## Validation and ownership summary
+
+- Client-only: `protected_routes` and `full_tunnel`.
+- Server-only: `server_routes`, `enable_forwarding`, `enable_nat`, and
+  `nat_egress_interface`.
+- `protected_routes` and `full_tunnel` are mutually exclusive.
+- NAT is IPv4-only, requires forwarding, and requires an egress interface different from TUN.
+- A pre-existing identical route or forwarding value is not claimed or removed.
+- A conflicting route, pre-existing `ip crabnet_nat` table, or externally changed owned object is
+  rejected rather than overwritten or deleted.
+
+Configuration validation happens before privileged TUN, route, forwarding, or nftables effects.
+The sample files target the four-namespace lab; interface names and addresses must be changed for a
+different namespace or container topology.
+
+## Future authenticated configuration
+
+Not implemented fields will likely need to cover protocol/version selection, local identity,
+trusted peer identity, secret or key loading, retry policy, and rekey policy. Their exact names and
+semantics are intentionally unspecified until the real protocol decision is reviewed. Do not add
+configuration that suggests version 1 data frames are authenticated.

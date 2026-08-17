@@ -324,9 +324,7 @@ impl SessionManager {
       return None;
     }
 
-    let Some(record) = self.pending_by_source.get(&source) else {
-      return None;
-    };
+    let record = self.pending_by_source.get(&source)?;
 
     Some(PendingCandidateSnapshot {
       candidate_id: record.id,
