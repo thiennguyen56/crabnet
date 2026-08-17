@@ -22,6 +22,7 @@ security.
 - [Routing sequence diagrams](docs/routing-sequences.md)
 - [Milestone 2.3 exhaustive design](docs/milestone-2.3-pure-handshake-coordination-design.md)
 - [Version 2 handshake framing design](docs/handshake-framing-design.md)
+- [Noise IK provider design](docs/noise-ik-provider-design.md)
 
 ## Current milestone status
 
