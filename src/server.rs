@@ -3,7 +3,8 @@
 //! The first completely validated Crabnet frame registers the only active UDP
 //! peer. Later traffic from other addresses is rejected without replacing it.
 
-use crate::protocol::{DecodeError, FrameCodec, MessageType};
+use crate::protocol::types::MessageType;
+use crate::protocol::v1::{DecodeError, FrameCodec};
 use crate::{tun::TunConfig, tun::TunDevice};
 use anyhow::Context;
 use std::net::SocketAddr;
