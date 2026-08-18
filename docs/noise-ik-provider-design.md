@@ -228,19 +228,19 @@ sequenceDiagram
     C->>C: Write message 1 with ClientHello control
     C->>T: ClientHello(attempt, 112-byte payload)
     T->>S: Decode, classify, size-check, admit candidate
-    S->>S: Read message 1; validate control and client allowlist
-    S->>S: Write message 2; save hash; enter stateless mode
+    S->>S: Read message 1 and validate control and client allowlist
+    S->>S: Write message 2, save hash, and enter stateless mode
     S->>T: ServerHello(attempt, 64-byte payload)
     T->>C: Decode, classify, exact-size check
-    C->>C: Read message 2; validate control and server pin
-    C->>C: Enter stateless mode; cache ClientFinish at nonce 0
+    C->>C: Read message 2 and validate control and server pin
+    C->>C: Enter stateless mode and cache ClientFinish at nonce 0
     C->>T: ClientFinish(attempt, 32-byte ciphertext)
     T->>S: Decode, classify, exact-size check
-    S->>S: Decrypt nonce 0; cache result and ServerFinish at nonce 0
+    S->>S: Decrypt nonce 0 and cache result and ServerFinish at nonce 0
     S->>S: Commit server session
     S->>T: ServerFinish(attempt, 32-byte ciphertext)
     T->>C: Decode, classify, exact-size check
-    C->>C: Decrypt nonce 0; validate control; commit client session
+    C->>C: Decrypt nonce 0, validate control, and commit client session
 ```
 
 An identical duplicate `ClientHello` returns the exact cached `ServerHello` without generating a
