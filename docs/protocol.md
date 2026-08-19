@@ -1,12 +1,12 @@
 # Current protocol
 
-This document distinguishes the active wire protocol from the completed pure handshake model:
+This document distinguishes the legacy data protocol from the integrated Noise-IK handshake-only runtime:
 
 | Protocol layer | Status |
 | --- | --- |
 | Version 1 data frame below | Implemented and used by the executable |
 | Four-message fake handshake | Implemented only as owned in-memory Rust values |
-| Version 2 handshake framing codec | Implemented and pure-tested, but not used by the executable |
+| Version 2 handshake framing codec | Implemented and used by the Noise-IK handshake-only runtime |
 | Authenticated and encrypted runtime protocol | Not implemented |
 
 Crabnet transports one raw inner IP packet in one version 1 data frame carried
@@ -92,8 +92,8 @@ requires exact lengths and borrows the opaque payload without allocation. The cl
 Version 1 data and version 2 handshake message types are mutually rejected.
 
 See [the framing design](handshake-framing-design.md) for the exhaustive contract. This codec is
-not connected to sockets or the coordinators, so successful parsing is neither authentication nor
-permission to forward packets.
+the codec itself does not authenticate payloads. The runtime adapter performs structural validation, then
+Noise-IK authenticates the owned payloads before the coordinator commits a session.
 
 ## Security boundary
 
@@ -101,11 +101,10 @@ Version 1 framing does not provide authentication, confidentiality, integrity,
 or replay protection. Anyone able to send a valid version 1 frame to an
 unregistered server can still select the single peer and inject inner packets.
 
-There is currently:
+Current limitations are:
 
-- no handshake on the wire or in the runtime;
-- no encryption;
-- no authentication;
+- Noise-IK is handshake-only and does not forward data after establishment;
+- legacy V1 data remains unauthenticated and unencrypted;
 - no replay protection;
 - no key rotation; and
 - no fragmentation or reassembly.

@@ -2,12 +2,12 @@
 
 Milestone tracked: **2.4**
 
-Status: **type scaffold present; the V2 codec is not implemented**
+Status: **implemented; codec, adapter, and handshake-only runtime integrated**
 
 This document is the implementation contract and progress checklist for Milestone 2.4. It defines
 a bounded, transport-facing byte envelope for the four handshake messages completed in Milestone
-2.3. It deliberately does not connect that handshake to UDP, choose real cryptography, or define an
-encrypted data frame.
+2.3. The codec remains pure; the provider adapter and Noise-IK handshake-only runtime connect it to
+UDP. This document still does not define an encrypted data frame.
 
 The framing code must be deterministic, synchronous, allocation-free while decoding, and testable
 without Tokio, sockets, TUN devices, root, or network namespaces.
@@ -404,7 +404,8 @@ establishment. Framing does not duplicate those rules.
 ### UDP adapter — deferred
 
 The later adapter will own addresses, I/O, buffers, deadlines, observability, payload conversion, and
-coordinator dispatch. No such runtime integration belongs in 2.4.
+coordinator dispatch. The current implementation performs that integration in `handshake::adapter` and
+`noise_runtime`; the data plane remains outside this milestone.
 
 ## 2. Data flow
 
@@ -1005,7 +1006,7 @@ pass and client/server runtime files have no behavioral diff.
 - [x] Update protocol, testing, architecture, README, and security wording after implementation.
 
 Failure: any document says authenticated, encrypted, connected, or production-ready. Acceptance:
-all current docs say that V2 framing is pure and disconnected.
+all current docs distinguish pure framing from the integrated Noise-IK handshake-only runtime.
 
 ### 2.4.8 Run the unprivileged gate
 

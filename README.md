@@ -5,10 +5,10 @@
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
 versioned packet framing, client split/full-tunnel routes, server IPv4
-forwarding, and IPv4 masquerading. A transport-neutral four-message handshake and bounded version
-2 byte-envelope codec are also complete and thoroughly tested, but neither is connected to the UDP
-runtime. The fake provider is not real cryptography, and the framing codec alone provides no live
-security.
+forwarding, and IPv4 masquerading. A real Noise-IK handshake now runs through
+the V2 UDP adapter, but the process stops after authentication because the
+encrypted data plane is not implemented. Legacy V1 forwarding remains a
+separate explicitly selected mode.
 
 ## Documentation
 
@@ -32,14 +32,14 @@ security.
 | Routes, forwarding diagnostics, and IPv4 NAT | Active runtime | Linux lab functionality with ownership-aware cleanup |
 | Session policy and fake crypto traits | Complete pure subsystem | Synchronous and testable without sockets or privileges |
 | Milestone 2.3 handshake coordination | Complete pure subsystem | Four fake handshake messages establish matching metadata |
-| Version 2 handshake framing | Complete pure subsystem | Exact bounded bytes, not connected to UDP or crypto payload parsing |
-| Authenticated wire protocol and runtime integration | Not implemented | No real crypto or data-session binding |
+| Version 2 handshake framing and adapter | Integrated handshake runtime | Exact bounded bytes, direction checks, provider dispatch, and ciphertext encoding |
+| Noise-IK authentication | Handshake-only runtime | Real key agreement and confirmation; no encrypted packet forwarding afterward |
+| Encrypted data protocol | Not implemented | No directional data keys, replay protection, or rekeying |
 | Production VPN security | Not implemented | No encryption, replay protection, rekeying, or DNS handling |
 
-Use [the handshake guide](docs/handshake.md) to understand the new state machines and coordinator
-before reading the exhaustive milestone documents. The next milestone must choose a reviewed
-protocol/library, bind the V2 envelope into its authenticated transcript, and define provider
-payload encoding and operational limits before touching the UDP runtime.
+Use [the handshake guide](docs/handshake.md) to understand the state machines and runtime boundary,
+then read the Noise-IK provider design. The next milestone is the encrypted data protocol and its
+Tokio session lifecycle; Noise-IK must not fall back to V1 forwarding.
 
 ## Why Crabnet?
 

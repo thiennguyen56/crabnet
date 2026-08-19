@@ -652,8 +652,8 @@ mod tests {
 
   const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
   const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-  const CLIENT_IDENTITY: PeerIdentity = PeerIdentity(11);
-  const SERVER_IDENTITY: PeerIdentity = PeerIdentity(22);
+  const CLIENT_IDENTITY: PeerIdentity = PeerIdentity::from_u64(11);
+  const SERVER_IDENTITY: PeerIdentity = PeerIdentity::from_u64(22);
 
   fn coordinator() -> ClientHandshakeCoordinator<FakeClientCrypto> {
     let policy =

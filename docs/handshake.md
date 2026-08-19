@@ -6,15 +6,15 @@ subsystem. For the exhaustive design contract and pseudocode, see
 
 ## Current status
 
-The authenticated-handshake model and its bounded version 2 byte envelope are implemented and
-tested as synchronous, transport-neutral Rust code. They are **not connected to the UDP forwarding
-runtime**. The executable still uses version 1 data frames, and the first valid frame selects the
-server peer without authentication.
+The authenticated-handshake model, Noise-IK provider, bounded V2 envelope, and provider adapter are
+implemented and tested. The executable has a Noise-IK handshake-only UDP mode; it authenticates the
+handshake and then stops. The separate legacy mode still uses V1 data frames, where the first valid
+frame selects the server peer without authentication.
 
 This separation is deliberate:
 
 ```text
-implemented pure subsystem                 active runtime
+implemented handshake subsystem              active runtimes
 
 session policy                             TUN packet
       ↕                                         ↓
@@ -22,13 +22,14 @@ handshake coordinator                     version 1 data frame
       ↕                                         ↓
 fake crypto provider                      UDP datagram
       ↕
-version 2 handshake codec
+version 2 handshake codec + adapter
 
-no sockets, no Tokio                       no secure handshake
+Noise-IK UDP handshake                       legacy V1 forwarding
 ```
 
-A passing pure handshake test proves state-machine and coordination behavior. It does not make the
-running VPN encrypted or authenticated.
+A passing pure handshake test proves state-machine and coordination behavior. A Noise-IK runtime test
+path additionally exercises real UDP handshake framing, but it still does not provide encrypted data
+forwarding.
 
 ## Why there are three layers
 
@@ -182,20 +183,18 @@ Read in this order:
 
 ## What it does not prove
 
-- a real cryptographic construction is safe;
-- version 2 handshake bytes are carried by UDP or used by the executable;
-- UDP loss, duplication, reordering, cancellation, or retry behavior works;
-- data frames are bound to an established session;
-- encryption, nonces, replay windows, rekeying, or downgrade protection exists; or
-- the running server authenticates its peer.
+- the Noise-IK primitive or deployment key management is production-safe;
+- packet data is encrypted after handshake establishment;
+- UDP loss, duplication, reordering, cancellation, retry, replay, or rekey behavior works;
+- data frames are bound to an established session; or
+- the legacy V1 runtime authenticates its peer.
 
-## Next milestone boundary
+## Current runtime boundary
 
-Before runtime integration, select a reviewed authenticated protocol or library and define its
-operational payload limit, transcript binding, and provider-payload adapter. Then add a transport
-adapter that applies the version 2 framing codec to untrusted datagrams, feeds owned messages into
-these coordinators, sends returned outbound messages, and schedules the nearest deadline without
-holding coordinator borrows across `.await`.
+`src/noise_runtime.rs` binds UDP, starts the client attempt, decodes and classifies V2 frames,
+validates exact Noise-IK payload sizes, dispatches to the coordinator, sends returned frames, and
+waits for both confirmation events. It uses a bounded receive buffer and a handshake deadline. After
+establishment it returns an explicit error instead of creating a TUN or forwarding plaintext.
 
-Do not place fake crypto on the live network and do not invent production cryptography merely to
-connect the coordinator to UDP.
+The next milestone is encrypted data framing, directional keys and nonces, replay protection,
+rekeying, and a session-aware Tokio forwarding loop. Do not place fake crypto on the live network.

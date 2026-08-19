@@ -1,1 +1,3 @@
-/target
+/config/client/client.key
+/config/server/server.key
+/target/

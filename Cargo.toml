@@ -1,6 +1,6 @@
 [package]
 name = "crabnet"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
@@ -14,3 +14,4 @@ toml = "1.0.3"
 env_logger = "0.11.9"
 ipnet = { version = "2.12.0", features = ["serde"] }
 serde_json = "1.0.151"
+snow = "0.10.0"

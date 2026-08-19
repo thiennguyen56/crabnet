@@ -3,8 +3,7 @@
 Crabnet is a Linux/Tokio TUN-over-UDP learning prototype with two deliberately separate tracks:
 
 - an active version 1 packet-forwarding runtime; and
-- a completed pure authenticated-handshake subsystem and V2 framing codec that are not wired into
-  that runtime yet.
+- a Noise-IK handshake-only runtime that uses the V2 framing adapter and stops before data forwarding.
 
 ```text
 CLI/config
@@ -13,6 +12,9 @@ Application::bind
    ├─ Client
    │  ├─ resolve full-tunnel VPN-server underlay route
    │  └─ RouteManager::install → iproute2
+   ├─ NoiseIk handshake-only runtime
+   │  ├─ UDP socket and V2 adapter
+   │  └─ Noise-IK coordinator
    └─ Server
       ├─ FirewallDiagnostics → read-only nftables inspection
       ├─ NatManager::install → nftables
@@ -28,11 +30,11 @@ Shutdown
       ├─ RouteManager::restore
       └─ NatManager::restore
 
-Pure handshake tests only
+Pure handshake and adapter tests
    ├─ Client/Server session policy
    ├─ Client/Server handshake coordinator
-   ├─ Fake crypto provider
-   └─ Version 2 handshake codec
+   ├─ Noise-IK and fake providers
+   └─ Version 2 handshake codec and runtime adapter
 ```
 
 The vertical runtime path moves real packets and changes Linux network state. The pure handshake
@@ -67,6 +69,9 @@ connect a reviewed protocol to the coordinator; fake crypto must never be used f
 - `src/crypto/fake.rs`: deterministic in-memory provider used only for pure tests.
 - `src/handshake/client.rs` and `src/handshake/server.rs`: policy/crypto transaction coordinators.
 - `src/handshake/types.rs`: transport-neutral messages, reports, events, and fatal errors.
+- `src/handshake/adapter.rs`: V2 decode, direction and exact-size validation, coordinator dispatch, and encoding.
+- `src/crypto/noise_ik/`: Noise-IK profile, key loading, and client/server providers.
+- `src/noise_runtime.rs`: handshake-only Tokio UDP runtime; it deliberately does not forward plaintext after establishment.
 
 See [`handshake.md`](handshake.md) for the learning-oriented explanation and
 [`milestone-2.3-pure-handshake-coordination-design.md`](milestone-2.3-pure-handshake-coordination-design.md)
@@ -75,8 +80,9 @@ state-machine, failure, and planned-integration views in one place.
 
 ## Current execution boundary
 
-Version 1 remains the only active wire protocol. It contains data frames only, so no authentication,
-encryption, or secure handshake is active in the executable. The pure subsystem nevertheless proves
+Version 1 remains the active data protocol. Noise-IK is an explicit handshake-only mode: it validates
+and authenticates the four V2 handshake messages, then exits with a clear data-plane-not-implemented
+error rather than entering V1 forwarding. The pure subsystem nevertheless proves
 the intended four-message coordination:
 
 ```text
@@ -88,14 +94,17 @@ crypto result correlations, commits identical authenticated metadata in policy a
 fails closed on local errors or invariant violations. Successful remote rejection is reported as a
 typed drop rather than a fatal local error.
 
-The next architecture boundary is not “call the fake coordinator from the socket loop.” It is:
+The next architecture boundary is the encrypted data protocol. The handshake runtime already owns the
+UDP adapter and coordinator lifecycle; it intentionally stops before TUN forwarding. The remaining
+work is directional data keys, nonces, replay windows, rekeying, and cancellation-aware session
+forwarding.
 
-1. select a reviewed authenticated protocol or library;
-2. define provider payload encoding, transcript binding, operational size limits, downgrade
-   behavior, and data-session binding;
-3. adapt provider payloads between the owned handshake messages and the V2 framing codec;
-4. integrate coordinator deadlines and outbound effects into cancellation-aware Tokio loops; and
-5. activate packet forwarding only after establishment.
+The earlier pure-subsystem boundary was:
+
+1. define encrypted data-frame encoding and directional key/nonce state;
+2. add replay, duplicate, timeout, rekey, and shutdown handling;
+3. integrate established sessions with TUN forwarding; and
+4. add non-privileged runtime adapter tests before extending the namespace test.
 
 The server intentionally supports one active UDP peer and has no authentication.
 This is a lab/test boundary, not a security boundary.

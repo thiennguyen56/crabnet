@@ -13,3 +13,6 @@ mtu = 1400
 
 [routing]
 full_tunnel = true
+
+[security]
+mode = "legacy"

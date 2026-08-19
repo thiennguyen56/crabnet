@@ -401,6 +401,12 @@ pub(crate) enum CryptoStateError {
     client_attempt_id: ClientAttemptId,
   },
   SessionIdExhausted,
+  NoiseIkFailure {
+    operation: ClientCryptoOperation,
+  },
+  NoiseIkServerFailure {
+    operation: ServerCryptoOperation,
+  },
 }
 impl fmt::Display for CryptoStateError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

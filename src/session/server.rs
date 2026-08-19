@@ -942,6 +942,7 @@ impl ServerHandshake {
 
 #[cfg(test)]
 mod tests {
+  const SESSION_9: SessionId = SessionId::from_u64(9);
   use super::*;
   use crate::session::types::{
     ClientAttemptId, EstablishedSessionMetadata, PeerIdentity, SessionId,
@@ -971,8 +972,8 @@ mod tests {
 
   fn metadata(session_id: u64) -> EstablishedSessionMetadata {
     EstablishedSessionMetadata {
-      session_id: SessionId(session_id),
-      peer_identity: PeerIdentity(7),
+      session_id: SessionId::from_u64(session_id),
+      peer_identity: PeerIdentity::from_u64(7),
     }
   }
 
@@ -982,7 +983,7 @@ mod tests {
     assert_eq!(server.state_name(), ServerStateName::Listening);
     assert_eq!(server.next_deadline(), None);
     assert!(matches!(
-      server.classify_data(source(4000), SessionId(1)),
+      server.classify_data(source(4000), SessionId::from_u64(1)),
       ServerDataDecision::RejectPreSession
     ));
   }
@@ -1153,15 +1154,15 @@ mod tests {
       .unwrap();
 
     assert!(matches!(report.effects.as_slice(), [
-      ServerEffect::SendServerFinish { session_id: SessionId(9), .. },
-      ServerEffect::SessionEstablished { source, session_id: SessionId(9) }
+      ServerEffect::SendServerFinish { session_id: SESSION_9, .. },
+      ServerEffect::SessionEstablished { source, session_id: SESSION_9 }
     ] if *source == peer));
     assert_eq!(server.state_name(), ServerStateName::Established);
     assert_eq!(server.next_deadline(), None);
     assert!(matches!(
-      server.classify_data(peer, SessionId(9)),
+      server.classify_data(peer, SESSION_9),
       ServerDataDecision::PermitEstablished {
-        session_id: SessionId(9)
+        session_id: SESSION_9
       }
     ));
 
@@ -1177,7 +1178,7 @@ mod tests {
     assert!(matches!(
       duplicate.effects.as_slice(),
       [ServerEffect::SendServerFinish {
-        session_id: SessionId(9),
+        session_id: SESSION_9,
         ..
       }]
     ));
@@ -1288,7 +1289,7 @@ mod tests {
     ));
     assert_eq!(server.state_name(), ServerStateName::Closed);
     assert!(matches!(
-      server.classify_data(source(4000), SessionId(1)),
+      server.classify_data(source(4000), SessionId::from_u64(1)),
       ServerDataDecision::RejectClosed
     ));
 
