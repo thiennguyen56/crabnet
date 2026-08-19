@@ -7,11 +7,11 @@ a deployed security boundary. The fake provider uses deterministic non-cryptogra
 codec does not authenticate its outer fields or opaque payload, and neither subsystem is called by
 the executable.
 
-- UDP traffic is unauthenticated.
+- Legacy V1 UDP data traffic is unauthenticated; Noise-IK handshake traffic is authenticated but has no data plane yet.
 - Inner packets are not encrypted.
-- The server has one active peer and no identity verification.
-- A peer can be selected by sending the first valid version 1 frame.
-- There is no replay protection or key rotation.
+- Legacy mode has one active peer and no identity verification; Noise-IK server mode uses an explicit public-key allowlist.
+- A peer can still be selected by sending the first valid version 1 frame in legacy mode.
+- There is no encrypted data framing, replay protection, sequence validation, or key rotation.
 - IPv4 masquerading is implemented, but firewall-policy automation is not.
 - Startup firewall diagnostics inspect only IPv4-relevant nftables forward
   base-chain declarations. They do not evaluate individual rules, legacy
@@ -49,8 +49,8 @@ cryptographic protocol.
 
 ## Security work still required
 
-Use a reviewed protocol/library, then add secret loading and zeroization strategy, authenticated
-binding for the V2 envelope, provider-payload parsing, encrypted data frames, unique nonces,
-anti-replay state, rekeying, downgrade protection, resource limits, runtime forwarding gates, and
+Use the implemented Noise-IK profile with carefully managed keys, then add encrypted data frames,
+unique directional nonces, anti-replay state, rekeying, downgrade protection, resource limits,
+startup/runtime forwarding gates, and
 adversarial integration tests. Firewall
 policy and DNS handling remain separate operator/runtime responsibilities.

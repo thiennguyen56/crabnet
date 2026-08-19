@@ -5,14 +5,14 @@ remain reviewable as text.
 
 The most important boundary is repeated throughout this page:
 
-- version 1 packet forwarding is active in the executable; and
-- the Milestone 2.3 handshake is complete only as a pure in-memory subsystem.
+- version 1 packet forwarding remains an explicit unauthenticated runtime mode; and
+- Noise-IK handshake framing and provider dispatch run in a separate handshake-only runtime that stops before data forwarding.
 
 ## 1. System context and implementation status
 
 ```mermaid
 flowchart LR
-    subgraph Runtime[Active version 1 runtime]
+    subgraph Runtime[Legacy V1 data runtime]
         ClientOS[Client OS]
         ClientTun[Client TUN]
         ClientRuntime[Crabnet client]
@@ -23,6 +23,13 @@ flowchart LR
 
         ClientOS --> ClientTun --> ClientRuntime --> UDP --> ServerRuntime --> ServerTun --> ServerOS
         ServerOS --> ServerTun --> ServerRuntime --> UDP --> ClientRuntime --> ClientTun --> ClientOS
+    end
+
+    subgraph Noise[Noise-IK handshake-only runtime]
+        NoiseClient[UDP client adapter]
+        NoiseCodec[V2 codec + exact-size checks]
+        NoiseProvider[Noise-IK provider + coordinator]
+        NoiseClient --> NoiseCodec --> NoiseProvider
     end
 
     subgraph Pure[Completed pure subsystem - tests only]

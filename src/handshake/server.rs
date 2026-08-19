@@ -751,8 +751,8 @@ mod tests {
 
   const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
   const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-  const CLIENT_IDENTITY: PeerIdentity = PeerIdentity(11);
-  const SERVER_IDENTITY: PeerIdentity = PeerIdentity(22);
+  const CLIENT_IDENTITY: PeerIdentity = PeerIdentity::from_u64(11);
+  const SERVER_IDENTITY: PeerIdentity = PeerIdentity::from_u64(22);
 
   type TestServerCoordinator = ServerHandshakeCoordinator<FakeServerCrypto>;
 
@@ -1005,7 +1005,7 @@ mod tests {
     assert!(matches!(
       established.events.as_slice(),
       [ServerCoordinatorEvent::SessionEstablished { source, metadata }]
-        if *source == peer && metadata.session_id == SessionId(100)
+        if *source == peer && metadata.session_id == SessionId::from_u64(100)
     ));
     assert!(matches!(
       established.outbound.as_slice(),

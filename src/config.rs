@@ -3,15 +3,39 @@
 //! CLI values override file values. Cross-field validation happens after both
 //! sources are merged and before privileged resources are created.
 
-use crate::{nat::validate_nft_interface_name, routing::RoutingConfig, tun::TunConfig};
+use crate::{
+  crypto::noise_ik::keys::{StaticPrivateKey, StaticPublicKey},
+  nat::validate_nft_interface_name,
+  routing::RoutingConfig,
+  tun::TunConfig,
+};
 use anyhow::{bail, ensure, Context};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 const DEFAULT_PORT: u16 = 51820;
+
+#[derive(Default, ValueEnum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityMode {
+  #[default]
+  Legacy,
+  NoiseIk,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct SecurityConfig {
+  #[serde(default)]
+  pub mode: SecurityMode,
+  pub private_key_path: Option<PathBuf>,
+  pub server_public_key: Option<String>,
+  #[serde(default)]
+  pub allowed_client_public_keys: Vec<String>,
+}
 
 /// Selects which Crabnet endpoint role to run.
 #[derive(ValueEnum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -101,6 +125,8 @@ pub struct Config {
   pub routing: RoutingConfig,
   /// Sets the process-wide logging filter.
   pub log_level: LogLevel,
+  #[serde(default)]
+  pub security: SecurityConfig,
 }
 
 /// Mode-specific UDP endpoint configuration.
@@ -136,6 +162,7 @@ impl Default for Config {
       },
       routing: RoutingConfig::default(),
       log_level: LogLevel::Info,
+      security: SecurityConfig::default(),
     }
   }
 }
@@ -203,8 +230,72 @@ impl Config {
   /// This rejects unimplemented NAT, cross-mode options, duplicate/default
   /// protected routes, and split routes that contain the VPN server and would
   /// recursively capture the transport.
+  fn validate_security(&self) -> anyhow::Result<()> {
+    match self.security.mode {
+      SecurityMode::Legacy => {
+        ensure!(
+          self.security.private_key_path.is_none(),
+          "security.private_key_path requires security.mode = noise_ik"
+        );
+        ensure!(
+          self.security.server_public_key.is_none(),
+          "security.server_public_key requires security.mode = noise_ik"
+        );
+        ensure!(
+          self.security.allowed_client_public_keys.is_empty(),
+          "security.allowed_client_public_keys requires security.mode = noise_ik"
+        );
+      }
+      SecurityMode::NoiseIk => {
+        let private_key_path = self
+          .security
+          .private_key_path
+          .as_ref()
+          .context("security.mode = noise_ik requires security.private_key_path")?;
+        StaticPrivateKey::load(private_key_path)?;
+        match self.mode {
+          ModeConfig::Client { .. } => {
+            let encoded = self
+              .security
+              .server_public_key
+              .as_deref()
+              .context("client Noise-IK mode requires security.server_public_key")?;
+            StaticPublicKey::from_hex(encoded)
+              .map_err(|error| anyhow::anyhow!("invalid security.server_public_key: {error}"))?;
+            ensure!(
+              self.security.allowed_client_public_keys.is_empty(),
+              "security.allowed_client_public_keys is server-only"
+            );
+          }
+          ModeConfig::Server { .. } => {
+            ensure!(
+              self.security.server_public_key.is_none(),
+              "security.server_public_key is client-only"
+            );
+            ensure!(
+              !self.security.allowed_client_public_keys.is_empty(),
+              "server Noise-IK mode requires a non-empty client allowlist"
+            );
+            let mut seen = HashSet::new();
+            for (index, encoded) in self.security.allowed_client_public_keys.iter().enumerate() {
+              ensure!(
+                seen.insert(encoded),
+                "security.allowed_client_public_keys contains duplicate entry at index {index}"
+              );
+              StaticPublicKey::from_hex(encoded).map_err(|error| {
+                anyhow::anyhow!("invalid security.allowed_client_public_keys[{index}]: {error}")
+              })?;
+            }
+          }
+        }
+      }
+    }
+    Ok(())
+  }
+
   pub fn validate(&self) -> anyhow::Result<()> {
     self.tun.validate()?;
+    self.validate_security()?;
 
     for (index, route) in self.routing.protected_routes.iter().enumerate() {
       ensure!(

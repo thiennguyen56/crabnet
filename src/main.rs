@@ -21,6 +21,7 @@ mod firewall;
 )]
 mod handshake;
 mod nat;
+mod noise_runtime;
 mod protocol;
 mod routing;
 mod server;

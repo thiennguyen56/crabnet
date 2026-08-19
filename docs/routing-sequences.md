@@ -5,9 +5,9 @@ internet-facing path. The private-service test covers full-tunnel selection,
 server routing, IPv4 forwarding, and source NAT. General internet use remains
 future work because firewall policy and full-tunnel DNS are not managed.
 
-Both packet-path diagrams show the active unauthenticated version 1 runtime. The completed pure
-handshake is not a preceding runtime step yet, so the diagrams must not be read as authenticated or
-encrypted tunnels.
+The packet-path diagrams show the legacy unauthenticated V1 runtime. Noise-IK is a separate
+handshake-only runtime path: it exchanges and authenticates V2 handshake frames, then stops before
+TUN creation and packet forwarding. These diagrams must not be read as encrypted tunnels.
 
 ## Private service routing
 

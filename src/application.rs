@@ -9,12 +9,13 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::client::{Client, ClientConfig};
-use crate::config::{Config, ModeConfig};
+use crate::config::{Config, ModeConfig, SecurityMode};
 use crate::firewall::{
   build_diagnostic_context, log_firewall_report, FirewallDiagnostics, LinuxFirewallInspector,
   TokioFirewallCommandRunner,
 };
 use crate::nat::{build_nat_spec, LinuxNatBackend, NatManager, TokioNatCommandRunner};
+use crate::noise_runtime::NoiseIkRuntime;
 use crate::routing::{
   full_tunnel_operations, server_operations, split_tunnel_operations, LinuxRouteBackend,
   RouteManager, RoutingConfig, TokioCommandRunner,
@@ -46,6 +47,9 @@ pub enum Application {
     /// Manager that restores that Crabnet-owned nftables tables.
     nat: LinuxNatManager,
   },
+  NoiseIk {
+    runtime: Box<NoiseIkRuntime>,
+  },
 }
 
 impl Application {
@@ -60,7 +64,15 @@ impl Application {
       tun,
       log_level: _,
       routing,
+      security,
+      ..
     } = config;
+
+    if security.mode == SecurityMode::NoiseIk {
+      return Ok(Self::NoiseIk {
+        runtime: Box::new(NoiseIkRuntime::bind(mode, security).await?),
+      });
+    }
 
     match mode {
       ModeConfig::Client {
@@ -165,6 +177,7 @@ impl Application {
 
         combine_run_and_cleanup("server", run_result, cleanup_result)?;
       }
+      Self::NoiseIk { runtime } => runtime.run().await?,
     }
 
     Ok(())

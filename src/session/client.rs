@@ -672,8 +672,8 @@ mod tests {
 
   fn metadata(session: u64, peer: u64) -> EstablishedSessionMetadata {
     EstablishedSessionMetadata {
-      session_id: SessionId(session),
-      peer_identity: PeerIdentity(peer),
+      session_id: SessionId::from_u64(session),
+      peer_identity: PeerIdentity::from_u64(peer),
     }
   }
 
@@ -948,13 +948,13 @@ mod tests {
     assert_eq!(
       action,
       ClientAction::SessionEstablished {
-        session_id: SessionId(7)
+        session_id: SessionId::from_u64(7)
       }
     );
     assert_eq!(
       client.classify_data(),
       ClientDataDecision::PermitEstablished {
-        session_id: SessionId(7)
+        session_id: SessionId::from_u64(7)
       }
     );
     assert!(matches!(
@@ -962,7 +962,7 @@ mod tests {
       ClientHandshakeState::Established {
         metadata,
         established_at: observed,
-      } if metadata.peer_identity == PeerIdentity(11) && *observed == established_at
+      } if metadata.peer_identity == PeerIdentity::from_u64(11) && *observed == established_at
     ));
   }
 

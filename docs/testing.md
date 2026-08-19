@@ -43,8 +43,8 @@ Pure handshake coverage is split by responsibility:
 
 All handshake time is supplied as `Instant`; these tests do not sleep or require sockets. Payload
 and credential debug-redaction tests ensure generic diagnostics do not reveal provider values.
-These policies and coordinators are not connected to version 1 runtime and do not prove real
-authentication or encryption.
+The pure policies and coordinators are not used by legacy V1 forwarding. Noise-IK provider tests prove the
+real cryptographic exchange in memory; they do not prove encrypted data forwarding or replay protection.
 
 ## Choosing the right test
 
@@ -56,6 +56,7 @@ authentication or encryption.
 | Client coordinator | `cargo test handshake::client::tests` |
 | Server coordinator | `cargo test handshake::server::tests` |
 | Complete pure handshake | `cargo test handshake::tests` |
+| Noise-IK provider and adapter | `cargo test crypto::noise_ik::tests` and `cargo test handshake::adapter::tests` |
 | Route/NAT/firewall pure logic | Relevant module tests with fake backends |
 | Runtime namespace behavior | Privileged script after explicit authorization |
 
@@ -84,8 +85,8 @@ service observes `172.16.0.1` rather than `10.0.0.2`, which proves source
 translation.
 
 Successful traffic proves that both Crabnet endpoints agree on the current
-frame format. It does not test authentication, encryption, or replay
-protection, and it does not execute the pure handshake coordinators.
+frame format. It does not test Noise-IK authentication, encrypted data, or replay protection. The namespace script
+continues to exercise only the explicitly unauthenticated legacy V1 path.
 
 The default route and NAT table exist only inside their test namespaces. The
 script never changes the host default route, forwarding state, or firewall.

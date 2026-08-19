@@ -677,7 +677,7 @@ impl FakeServerCrypto {
       .next_session_id
       .ok_or(CryptoStateError::SessionIdExhausted)?;
     self.next_session_id = NonZeroU64::new(current.get().wrapping_add(1));
-    Ok(SessionId(current.get()))
+    Ok(SessionId::from_u64(current.get()))
   }
 
   fn check_tuple(
@@ -1088,13 +1088,18 @@ mod tests {
 
   fn pair(first_session_id: u64) -> (FakeClientCrypto, FakeServerCrypto) {
     let client = FakeClientCrypto::new(
-      FakeClientCryptoConfig::new(credential(7), PeerIdentity(1), PeerIdentity(2)).unwrap(),
+      FakeClientCryptoConfig::new(
+        credential(7),
+        PeerIdentity::from_u64(1),
+        PeerIdentity::from_u64(2),
+      )
+      .unwrap(),
     );
     let server = FakeServerCrypto::new(
       FakeServerCryptoConfig::new(
         credential(7),
-        PeerIdentity(2),
-        PeerIdentity(1),
+        PeerIdentity::from_u64(2),
+        PeerIdentity::from_u64(1),
         NonZeroU64::new(first_session_id).unwrap(),
       )
       .unwrap(),
@@ -1175,14 +1180,17 @@ mod tests {
     };
     assert_eq!(context.metadata, authenticated_server.metadata());
     assert_eq!(server.phase(), ServerCryptoPhase::Established);
-    assert_eq!(authenticated_client.metadata().session_id, SessionId(11));
+    assert_eq!(
+      authenticated_client.metadata().session_id,
+      SessionId::from_u64(11)
+    );
     assert_eq!(
       authenticated_client.metadata().peer_identity,
-      PeerIdentity(1)
+      PeerIdentity::from_u64(1)
     );
     assert_eq!(
       authenticated_server.metadata().peer_identity,
-      PeerIdentity(2)
+      PeerIdentity::from_u64(2)
     );
   }
 
@@ -1241,7 +1249,12 @@ mod tests {
   #[test]
   fn wrong_credential_is_remote_failure_and_preserves_candidate() {
     let mut client = FakeClientCrypto::new(
-      FakeClientCryptoConfig::new(credential(9), PeerIdentity(1), PeerIdentity(2)).unwrap(),
+      FakeClientCryptoConfig::new(
+        credential(9),
+        PeerIdentity::from_u64(1),
+        PeerIdentity::from_u64(2),
+      )
+      .unwrap(),
     );
     let (_, mut server) = pair(1);
     let attempt = ClientAttemptId(1);
@@ -1381,7 +1394,7 @@ mod tests {
       .unwrap();
     assert_eq!(prepared.candidate_id(), candidate);
     assert_eq!(prepared.client_attempt_id(), attempt);
-    assert_eq!(prepared.session_id(), SessionId(60));
+    assert_eq!(prepared.session_id(), SessionId::from_u64(60));
     let _ = prepared.payload();
     let server_finish = prepared.into_payload();
 
@@ -1424,7 +1437,7 @@ mod tests {
         .authenticate_client_finish(candidate, attempt, finish)
         .unwrap(),
     );
-    assert_eq!(event.metadata().session_id, SessionId(u64::MAX));
+    assert_eq!(event.metadata().session_id, SessionId::from_u64(u64::MAX));
     server
       .reject_authenticated_candidate(candidate, attempt)
       .unwrap();

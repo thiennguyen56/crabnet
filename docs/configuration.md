@@ -3,10 +3,9 @@
 Configuration is TOML. The sample files are in `config/client/config.toml` and
 `config/server/config.toml`.
 
-The executable currently has no handshake, identity, credential, or key configuration. Milestone
-2.3 uses values constructed directly in pure tests; adding fake credentials to TOML would create a
-misleading security boundary. A future version 2 configuration must be designed with the selected
-reviewed protocol or library.
+The executable supports two explicit security modes. `legacy` runs the existing unauthenticated V1
+data path. `noise_ik` loads real static key material, performs the V2 Noise-IK handshake, and then
+stops because encrypted data forwarding is not implemented yet.
 
 ## Loading and CLI overrides
 
@@ -143,9 +142,20 @@ Configuration validation happens before privileged TUN, route, forwarding, or nf
 The sample files target the four-namespace lab; interface names and addresses must be changed for a
 different namespace or container topology.
 
-## Future authenticated configuration
+## Security
 
-Not implemented fields will likely need to cover protocol/version selection, local identity,
-trusted peer identity, secret or key loading, retry policy, and rekey policy. Their exact names and
-semantics are intentionally unspecified until the real protocol decision is reviewed. Do not add
-configuration that suggests version 1 data frames are authenticated.
+```toml
+[security]
+mode = "legacy" # or "noise_ik"
+private_key_path = "/etc/crabnet/noise-ik-private.key"
+server_public_key = "<64 lowercase hex characters>" # client only
+allowed_client_public_keys = ["<64 lowercase hex characters>"] # server only
+```
+
+Noise-IK requires a 32-byte private key encoded as exactly 64 lowercase hexadecimal characters.
+The file must not be readable by group or other users. Clients require one pinned server public key;
+servers require at least one unique allowed client public key. Noise-IK configuration is validated
+before any TUN, route, NAT, or forwarding state is created.
+
+Noise-IK currently performs only the authenticated handshake over UDP and exits before packet
+forwarding. It must not be used as a claim that V1 data frames are authenticated or encrypted.

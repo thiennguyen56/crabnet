@@ -13,3 +13,8 @@ mtu = 1400
 
 [routing]
 full_tunnel = true
+
+[security]
+mode = "noise_ik"
+private_key_path = "/etc/crabnet/client.key"
+server_public_key = "<canonical encoded 32-byte key>" # client only

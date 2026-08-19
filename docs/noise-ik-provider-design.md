@@ -1,12 +1,12 @@
 # Noise IK provider design
 
-Status: **design approved in principle; no implementation exists**
+Status: **Noise-IK provider and handshake-only runtime implemented; encrypted data plane remains pending**
 
 This document is the implementation contract for Crabnet's first real authenticated handshake
 provider. It selects Noise IK, defines how its two-message handshake fits Crabnet's existing
 four-message coordinator, and identifies the work required before the provider reaches UDP.
 
-Nothing here makes the current executable secure. Version 1 remains the only active runtime
+Nothing here makes the current executable a secure data tunnel. The executable now has a Noise-IK handshake-only runtime; Version 1 remains the active data runtime
 protocol, and the fake provider remains test-only.
 
 ## Decision summary
@@ -196,11 +196,9 @@ ciphertext without inspecting it. It is synchronous and never calls the Noise li
 They continue to authorize source, attempt, phase, deadline, and duplicates before crypto; verify
 all provider correlations; commit policy and provider state; and fail closed on local errors.
 
-### Future Tokio runtime adapter
+### Tokio handshake runtime adapter
 
-This later component owns sockets, deadlines, retransmission, cancellation, and counters. It must
-not enable TUN forwarding when Noise message 2 succeeds. Establishment requires both confirmation
-messages and coordinator commit.
+`src/noise_runtime.rs` owns UDP sockets, a bounded receive buffer, the handshake deadline, and coordinator dispatch. It does not create a TUN or enable forwarding when Noise message 2 succeeds. Establishment requires both confirmation messages and coordinator commit; the runtime then returns an explicit data-plane-not-implemented error.
 
 ## 2. Data flow
 
@@ -213,7 +211,8 @@ parse configuration
   -> parse pinned or allowlisted public keys
   -> construct provider
   -> construct V2 codec with maximum opaque payload 112
-  -> only then bind runtime resources in a later milestone
+  -> bind UDP socket and run the handshake-only adapter
+  -> stop before TUN/data forwarding
 ```
 
 ### Authenticated exchange
@@ -593,7 +592,8 @@ operator-facing design before claiming deployable key management.
 4. Implement and pure-test per-candidate server contexts and duplicates.
 5. Run real providers through existing coordinators; retain fake providers for fault injection.
 6. Add the synchronous provider-payload/V2 adapter.
-7. Stop and separately design encrypted data, replay, rekey, and UDP retry before runtime edits.
+7. Integrate the handshake-only Tokio UDP runtime.
+8. Design encrypted data, replay, rekey, and session-aware forwarding before enabling the data plane.
 
 The provider milestone is complete only when exact profile, binding, and sizes are frozen; both real
 providers complete the four-message flow in memory; rejection and cleanup matrices pass; secrets

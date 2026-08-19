@@ -5,5 +5,6 @@
 
 pub(crate) mod client;
 pub(crate) mod fake;
+pub(crate) mod noise_ik;
 pub(crate) mod server;
 pub(crate) mod types;

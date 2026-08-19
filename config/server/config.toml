@@ -17,3 +17,10 @@ server_routes = [
 enable_forwarding = true
 enable_nat = true
 nat_egress_interface = "cn-srv-back"
+
+[security]
+mode = "noise_ik"
+private_key_path = "/etc/crabnet/client.key"
+
+# server only
+allowed_client_public_keys = ["<canonical encoded 32-byte key>"]

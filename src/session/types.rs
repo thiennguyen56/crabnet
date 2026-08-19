@@ -2,19 +2,45 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ClientAttemptId(pub u64);
 
-/// Non-secret policy token identifying one authenticated session.
-///
-/// The integer is not a frozen wire representation. A later secure-protocol
-/// milestone will replace its construction with authenticated session output.
+/// Full authenticated Noise handshake hash identifying one session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct SessionId(pub u64);
+pub(crate) struct SessionId(pub [u8; 32]);
 
-/// Non-secret policy token identifying the authenticated server credential.
-///
-/// This token is not a socket address, PSK, or derived key. Its final
-/// representation belongs to the security-configuration milestone.
+impl SessionId {
+  pub(crate) const fn from_u64(value: u64) -> Self {
+    let bytes = value.to_be_bytes();
+    let mut output = [0_u8; 32];
+    output[24] = bytes[0];
+    output[25] = bytes[1];
+    output[26] = bytes[2];
+    output[27] = bytes[3];
+    output[28] = bytes[4];
+    output[29] = bytes[5];
+    output[30] = bytes[6];
+    output[31] = bytes[7];
+    Self(output)
+  }
+}
+
+/// Authenticated 32-byte Noise static public key identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PeerIdentity(pub u64);
+pub(crate) struct PeerIdentity(pub [u8; 32]);
+
+impl PeerIdentity {
+  pub(crate) const fn from_u64(value: u64) -> Self {
+    let bytes = value.to_be_bytes();
+    let mut output = [0_u8; 32];
+    output[24] = bytes[0];
+    output[25] = bytes[1];
+    output[26] = bytes[2];
+    output[27] = bytes[3];
+    output[28] = bytes[4];
+    output[29] = bytes[5];
+    output[30] = bytes[6];
+    output[31] = bytes[7];
+    Self(output)
+  }
+}
 
 /// Non-secret metadata produced only after authenticated key confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
