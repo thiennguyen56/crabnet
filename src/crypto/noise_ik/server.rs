@@ -180,9 +180,16 @@ impl ServerHandshakeCrypto for ServerProvider {
       .build_responder()
       .map_err(|_| Self::fail(op))?;
     let mut plain = [0; CLIENT_HELLO_PAYLOAD_LENGTH];
-    let n = state
-      .read_message(&payload.0, &mut plain)
-      .map_err(|_| Self::fail(op))?;
+    let n = match state.read_message(&payload.0, &mut plain) {
+      Ok(n) => n,
+      Err(_) => {
+        return Ok(Self::failure(
+          candidate,
+          attempt,
+          AuthenticationFailureReason::InvalidProof,
+        ));
+      }
+    };
     if n != 16 || Profile::validate_control(&plain[..n], MessageType::ClientHello, attempt).is_err()
     {
       return Ok(Self::failure(
@@ -503,6 +510,27 @@ mod tests {
   use crate::crypto::types::ClientCryptoPhase;
   use snow::params::NoiseParams;
   use snow::Builder;
+
+  #[test]
+  fn invalid_client_hello_is_remote_failure() {
+    let params: NoiseParams = NOISE_PROTOCOL_NAME.parse().unwrap();
+    let server_keys = Builder::new(params).generate_keypair().unwrap();
+    let mut server = ServerProvider::new(server_keys.private.into(), vec![]);
+    let result = server
+      .prepare_server_hello(
+        CandidateId::new(1),
+        ClientAttemptId(9),
+        NoiseIkPayload(vec![0_u8; CLIENT_HELLO_PAYLOAD_LENGTH].into_boxed_slice()),
+      )
+      .unwrap();
+    assert!(matches!(
+      result,
+      CryptoOutcome::RemoteFailure(AuthenticationFailure::ServerCandidate {
+        reason: AuthenticationFailureReason::InvalidProof,
+        ..
+      })
+    ));
+  }
 
   #[test]
   fn completes_noise_ik_confirmation_flow() {

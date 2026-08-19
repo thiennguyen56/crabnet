@@ -33,6 +33,15 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_PENDING: usize = 1;
 
+fn is_remote_frame_rejection(error: &crate::handshake::adapter::AdapterError) -> bool {
+  matches!(
+    error,
+    crate::handshake::adapter::AdapterError::Decode(_)
+      | crate::handshake::adapter::AdapterError::Direction(_)
+      | crate::handshake::adapter::AdapterError::PayloadLength { .. }
+  )
+}
+
 pub(crate) enum NoiseIkRuntime {
   Client {
     socket: UdpSocket,
@@ -131,14 +140,22 @@ impl NoiseIkRuntime {
           let length = tokio::time::timeout_at(deadline, socket.recv(&mut buffer))
             .await
             .context("Noise-IK client handshake timed out")??;
-          let report = receive_client_frame(
+          let report = match receive_client_frame(
             coordinator,
             &codec,
             *server_addr,
             &buffer[..length],
             Instant::now(),
-          )
-          .map_err(|e| anyhow::anyhow!("process Noise-IK server frame: {e:?}"))?;
+          ) {
+            Ok(report) => report,
+            Err(error) if is_remote_frame_rejection(&error) => {
+              log::warn!("dropping malformed Noise-IK server datagram: {error:?}");
+              continue;
+            }
+            Err(error) => {
+              return Err(anyhow::anyhow!("process Noise-IK server frame: {error:?}"));
+            }
+          };
           for datagram in report.datagrams {
             socket
               .send(&datagram)
@@ -161,17 +178,42 @@ impl NoiseIkRuntime {
       } => {
         let mut buffer = vec![0_u8; codec.max_datagram_len() + 1];
         loop {
-          let (length, source) = tokio::time::timeout_at(deadline, socket.recv_from(&mut buffer))
-            .await
-            .context("Noise-IK server handshake timed out")??;
-          let report = receive_server_frame(
+          let received = match coordinator.next_deadline() {
+            Some(candidate_deadline) => {
+              tokio::select! {
+                result = socket.recv_from(&mut buffer) => Some(result.context("receive Noise-IK server datagram")?),
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(candidate_deadline)) => {
+                  coordinator.check_timeouts(Instant::now()).map_err(|error| anyhow::anyhow!("expire Noise-IK server candidates: {error:?}"))?;
+                  None
+                }
+              }
+            }
+            None => Some(
+              socket
+                .recv_from(&mut buffer)
+                .await
+                .context("receive Noise-IK server datagram")?,
+            ),
+          };
+          let Some((length, source)) = received else {
+            continue;
+          };
+          let report = match receive_server_frame(
             coordinator,
             &codec,
             source,
             &buffer[..length],
             Instant::now(),
-          )
-          .map_err(|e| anyhow::anyhow!("process Noise-IK client frame: {e:?}"))?;
+          ) {
+            Ok(report) => report,
+            Err(error) if is_remote_frame_rejection(&error) => {
+              log::warn!("dropping malformed Noise-IK client datagram from {source}: {error:?}");
+              continue;
+            }
+            Err(error) => {
+              return Err(anyhow::anyhow!("process Noise-IK client frame: {error:?}"));
+            }
+          };
           for outbound in report.datagrams {
             socket
               .send_to(&outbound.datagram, outbound.destination)

@@ -558,6 +558,11 @@ where
     Ok(events)
   }
 
+  /// Returns the nearest deadline owned by the server session policy.
+  pub(crate) fn next_deadline(&self) -> Option<Instant> {
+    self.policy.next_deadline()
+  }
+
   pub(crate) fn check_timeouts(
     &mut self,
     now: Instant,

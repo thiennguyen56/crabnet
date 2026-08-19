@@ -4,6 +4,8 @@ Configuration is TOML. The sample files are in `config/client/config.toml` and
 `config/server/config.toml`.
 
 The executable supports two explicit security modes. `legacy` runs the existing unauthenticated V1
+
+The namespace-lab sample files intentionally select `legacy` because `scripts/test-local-tunnel.sh` tests the V1 TUN/UDP forwarding, routing, and NAT path. Use a separate local configuration with `noise_ik` and generated keys for the handshake-only runtime.
 data path. `noise_ik` loads real static key material, performs the V2 Noise-IK handshake, and then
 stops because encrypted data forwarding is not implemented yet.
 

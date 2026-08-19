@@ -15,6 +15,4 @@ mtu = 1400
 full_tunnel = true
 
 [security]
-mode = "noise_ik"
-private_key_path = "config/client/client.key"
-server_public_key = "0e2f358ca0da84e7d9844645d5daa61c770e5a21040fa7e098baf628b0554147"
+mode = "legacy"
