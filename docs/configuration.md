@@ -159,3 +159,17 @@ before any TUN, route, NAT, or forwarding state is created.
 
 Noise-IK currently performs only the authenticated handshake over UDP and exits before packet
 forwarding. It must not be used as a claim that V1 data frames are authenticated or encrypted.
+
+### Generating local Noise-IK keys
+
+The repository includes a local-lab generator that uses the same Snow Noise profile as the provider:
+
+```bash
+cargo run --bin generate_noise_keys
+```
+
+It generates one 32-byte X25519 private key and matching 32-byte public key for each role. Keys are
+written as exactly 64 lowercase hexadecimal characters. Private files are set to mode `0600` and
+are ignored by Git; public files are temporary output used to update the two sample configs. Never
+commit a private key or reuse these lab keys in production. Regenerate both pairs together, then
+replace the client pin and server allowlist with the new public keys.

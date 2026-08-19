@@ -20,7 +20,7 @@ nat_egress_interface = "cn-srv-back"
 
 [security]
 mode = "noise_ik"
-private_key_path = "/etc/crabnet/client.key"
+private_key_path = "config/server/server.key"
 
 # server only
-allowed_client_public_keys = ["<canonical encoded 32-byte key>"]
+allowed_client_public_keys = ["d3d1e45e2939b05002156d168a9240714c1c03b74468a8f2b02550919c44ea10"]
