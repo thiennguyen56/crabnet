@@ -61,8 +61,8 @@ flowchart LR
     Future -. will eventually gate .-> Runtime
 ```
 
-The dashed arrows are roadmap boundaries, not current calls. The executable does not construct or
-drive either handshake coordinator.
+The Noise subgraph is current handshake-only runtime behavior. The dashed Future arrows are roadmap
+boundaries for encrypted data forwarding; the executable does not enter that path yet.
 
 ## 2. Active version 1 packet flow
 
@@ -244,7 +244,7 @@ Remote authentication failure is ordinary hostile input when its domain and IDs 
 provider returning the wrong failure variant or wrong correlation is a local contract violation and
 therefore fatal.
 
-## 7. Planned integration boundary
+## 7. V2 Noise-IK handshake runtime
 
 ```mermaid
 flowchart LR
@@ -256,13 +256,80 @@ flowchart LR
     Serializer[Version 2 serializer]
     Socket[Tokio UDP socket]
     Deadline[Nearest coordinator deadline]
-    Forwarding[Encrypted data forwarding]
+    Stop[Stop before encrypted data plane]
 
     Datagram --> Parser --> Message --> Coordinator --> Report --> Serializer --> Socket
     Deadline --> Coordinator
-    Report -->|SessionEstablished| Forwarding
+    Report -->|SessionEstablished| Stop
 ```
 
-The adapter must keep parsing, socket I/O, timers, and cancellation outside the pure coordinator.
-It must not hold a coordinator borrow across `.await`, and forwarding must remain disabled until a
-real provider establishes authenticated session state.
+The current adapter keeps parsing, socket I/O, timers, and cancellation outside the pure coordinator.
+It does not hold a coordinator borrow across `.await`, and it stops after both confirmation messages establish authenticated session state.
+
+## 8. V2 frame validation and dispatch
+
+```mermaid
+flowchart TD
+    Datagram[UDP datagram] --> Decode[Decode V2 frame]
+    Decode -->|Malformed| RejectDecode[Reject before coordinator]
+    Decode --> Direction[Classify direction and message type]
+    Direction -->|Wrong role or version| RejectDirection[Reject before provider]
+    Direction --> Size[Check exact Noise-IK payload size]
+    Size -->|112 ClientHello| CopyHello[Copy into NoiseIkPayload]
+    Size -->|64 ServerHello| CopyServerHello[Copy into NoiseIkPayload]
+    Size -->|32 ClientFinish or ServerFinish| CopyFinish[Copy into NoiseIkPayload]
+    Size -->|Any other length| RejectSize[Reject before Noise]
+    CopyHello --> Dispatch[Dispatch to matching coordinator]
+    CopyServerHello --> Dispatch
+    CopyFinish --> Dispatch
+    Dispatch --> Provider[Noise-IK provider]
+    Provider --> Report[Coordinator report]
+    Report --> Encode[Encode returned ciphertext without inspection]
+    Encode --> Send[UDP send]
+    Report -->|SessionEstablished| Stop[Stop: encrypted data plane pending]
+```
+
+The adapter rejects malformed, misdirected, and incorrectly sized frames before mutating provider state. It owns the borrowed-to-owned payload boundary; the provider receives only `NoiseIkPayload`. Returned provider bytes are treated as opaque and are only placed into the V2 envelope for transmission.
+
+## 9. V2 Noise-IK message exchange
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client UDP runtime
+    participant CA as Client adapter
+    participant CP as Client coordinator/provider
+    participant U as UDP underlay
+    participant S as Server UDP runtime
+    participant SA as Server adapter
+    participant SP as Server coordinator/provider
+
+    C->>CA: start_client_frame(now)
+    CA->>CP: start(attempt)
+    CP-->>CA: ClientHello payload (112 bytes)
+    CA-->>C: Encode V2 ClientHello
+    C->>U: Send datagram
+    U->>S: Receive datagram
+    S->>SA: Decode, classify, size-check, copy payload
+    SA->>SP: receive_client_hello
+    SP-->>SA: ServerHello payload (64 bytes)
+    SA-->>S: Encode V2 ServerHello
+    S->>U: Send datagram
+    U->>C: Receive datagram
+    C->>CA: Decode, classify, size-check, copy payload
+    CA->>CP: receive_server_hello
+    CP-->>CA: ClientFinish payload (32 bytes)
+    CA-->>C: Encode V2 ClientFinish
+    C->>U: Send datagram
+    U->>S: Receive datagram
+    S->>SA: Decode, classify, size-check, copy payload
+    SA->>SP: receive_client_finish
+    SP-->>SA: ServerFinish payload (32 bytes)
+    SA-->>S: Encode V2 ServerFinish
+    S->>U: Send datagram
+    U->>C: Receive datagram
+    C->>CA: Decode, classify, size-check, copy payload
+    CA->>CP: receive_server_finish and commit
+    CP-->>C: SessionEstablished
+    Note over C,S: Runtime stops; encrypted data forwarding is not implemented
+```
