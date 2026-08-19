@@ -1,15 +1,15 @@
-name: Tag main
+name: Tag master
 
 on:
   push:
     branches:
-      - main
+      - master
 
 permissions:
   contents: write
 
 concurrency:
-  group: auto-tag-main
+  group: auto-tag-master
   cancel-in-progress: false
 
 jobs:
