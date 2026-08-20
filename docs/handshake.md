@@ -1,8 +1,7 @@
 # Pure handshake guide
 
-This guide is the shortest path to understanding Crabnet's completed Milestone 2.3 handshake
-subsystem. For the exhaustive design contract and pseudocode, see
-[`milestone-2.3-pure-handshake-coordination-design.md`](milestone-2.3-pure-handshake-coordination-design.md).
+This guide is the shortest path to understanding Crabnet's completed handshake
+subsystem. See the protocol and Noise-IK provider design documents for the detailed contracts.
 
 ## Current status
 
@@ -171,7 +170,7 @@ Read in this order:
 6. `src/handshake/client.rs` and `src/handshake/server.rs` — transaction ordering and cleanup.
 7. `src/handshake.rs` tests — complete in-memory message transfer.
 
-## What Milestone 2.3 proves
+## What the handshake subsystem proves
 
 - all four fake handshake messages complete;
 - both endpoints commit the same session ID and opposite peer identities;

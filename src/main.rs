@@ -10,14 +10,14 @@ mod client;
 mod config;
 #[allow(
   dead_code,
-  reason = "the pure crypto boundary is intentionally not runtime-integrated yet"
+  reason = "the provider traits remain reusable outside the Tokio runtime"
 )]
 mod crypto;
 mod firewall;
 #[allow(
   dead_code,
   clippy::result_large_err,
-  reason = "milestone 2.3 keeps rich typed errors before runtime integration"
+  reason = "handshake keeps rich typed errors across the runtime adapter"
 )]
 mod handshake;
 mod nat;

@@ -73,9 +73,7 @@ connect a reviewed protocol to the coordinator; fake crypto must never be used f
 - `src/crypto/noise_ik/`: Noise-IK profile, key loading, and client/server providers.
 - `src/noise_runtime.rs`: handshake-only Tokio UDP runtime; it deliberately does not forward plaintext after establishment.
 
-See [`handshake.md`](handshake.md) for the learning-oriented explanation and
-[`milestone-2.3-pure-handshake-coordination-design.md`](milestone-2.3-pure-handshake-coordination-design.md)
-for the exhaustive contract. [`diagrams.md`](diagrams.md) provides the current runtime, handshake,
+See [`handshake.md`](handshake.md) for the learning-oriented explanation and the coordinator contract. [`diagrams.md`](diagrams.md) provides the current runtime, handshake,
 state-machine, failure, and planned-integration views in one place.
 
 ## Current execution boundary

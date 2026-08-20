@@ -116,7 +116,7 @@ before use on untrusted networks.
 
 ## Pure handshake messages and byte envelopes remain separate
 
-Milestone 2.3 defines these generic transport-neutral values:
+This handshake layer defines these generic transport-neutral values:
 
 ```text
 ClientHello<Payload>  { client_attempt_id, payload }
