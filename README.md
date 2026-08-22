@@ -5,10 +5,9 @@
 Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
 supports a single unauthenticated UDP peer, binary packet forwarding, logging,
 versioned packet framing, client split/full-tunnel routes, server IPv4
-forwarding, and IPv4 masquerading. A real Noise-IK handshake now runs through
-the V2 UDP adapter, but the process stops after authentication because the
-encrypted data plane is not implemented. Legacy V1 forwarding remains a
-separate explicitly selected mode.
+forwarding, and IPv4 masquerading. Noise-IK uses the V2 UDP adapter, commits the authenticated four-message
+handshake, and forwards only encrypted data frames. Legacy V1 forwarding remains
+a separate explicitly selected mode.
 
 ## Documentation
 
@@ -34,13 +33,11 @@ separate explicitly selected mode.
 | Session policy and fake crypto traits | Complete pure subsystem | Synchronous and testable without sockets or privileges |
 | Handshake coordination | Complete pure subsystem | Four fake handshake messages establish matching metadata |
 | Version 2 handshake framing and adapter | Integrated handshake runtime | Exact bounded bytes, direction checks, provider dispatch, and ciphertext encoding |
-| Noise-IK authentication | Handshake-only runtime | Real key agreement and confirmation; no encrypted packet forwarding afterward |
-| Encrypted data protocol | Not implemented | No directional data keys, replay protection, or rekeying |
-| Production VPN security | Not implemented | No encryption, replay protection, rekeying, or DNS handling |
+| Noise-IK authentication and encrypted data | Active runtime | Commits Noise-IK, binds the authenticated V2 header, and forwards directional encrypted packets with replay checks |
+| Production VPN security | Not implemented | No rekeying, DNS handling, firewall-policy automation, or multi-peer support |
 
 Use [the handshake guide](docs/handshake.md) to understand the state machines and runtime boundary,
-then read the Noise-IK provider design. The next milestone is the encrypted data protocol and its
-Tokio session lifecycle; Noise-IK must not fall back to V1 forwarding.
+then read the encrypted V2 data-plane design. Noise-IK never falls back to V1 forwarding.
 
 ## Why Crabnet?
 

@@ -6,8 +6,8 @@ subsystem. See the protocol and Noise-IK provider design documents for the detai
 ## Current status
 
 The authenticated-handshake model, Noise-IK provider, bounded V2 envelope, and provider adapter are
-implemented and tested. The executable has a Noise-IK handshake-only UDP mode; it authenticates the
-handshake and then stops. The separate legacy mode still uses V1 data frames, where the first valid
+implemented and tested. The executable has a Noise-IK UDP mode; it authenticates the
+handshake and then forwards only encrypted V2 data frames. The separate legacy mode still uses V1 data frames, where the first valid
 frame selects the server peer without authentication.
 
 This separation is deliberate:

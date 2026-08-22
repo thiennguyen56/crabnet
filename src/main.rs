@@ -13,6 +13,7 @@ mod config;
   reason = "the provider traits remain reusable outside the Tokio runtime"
 )]
 mod crypto;
+mod data_plane;
 mod firewall;
 #[allow(
   dead_code,

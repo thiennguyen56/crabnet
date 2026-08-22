@@ -85,8 +85,24 @@ service observes `172.16.0.1` rather than `10.0.0.2`, which proves source
 translation.
 
 Successful traffic proves that both Crabnet endpoints agree on the current
-frame format. It does not test Noise-IK authentication, encrypted data, or replay protection. The namespace script
-continues to exercise only the explicitly unauthenticated legacy V1 path.
+legacy frame format. It does not test Noise-IK authentication, encrypted data, or replay protection.
+
+## Privileged Noise-IK encrypted-data test
+
+The dedicated V2 test creates only `cn-noise-client` and `cn-noise-server`, plus one veth pair:
+
+```bash
+cargo build --bins
+sudo scripts/test-noise-ik-tunnel.sh
+```
+
+It generates throwaway static keys beneath its printed log directory, commits a real Noise-IK
+handshake, creates both TUN interfaces only after commitment, proves encrypted overlay ping, injects
+a malformed UDP datagram, verifies its drop in the server log, and proves the established session
+still delivers packets. It does not change host routes, forwarding, or firewall state.
+
+Replay and tamper injection remain covered by the pure data-plane tests and require a follow-up
+raw-packet namespace probe before this script can claim adversarial wire coverage.
 
 The default route and NAT table exist only inside their test namespaces. The
 script never changes the host default route, forwarding state, or firewall.
