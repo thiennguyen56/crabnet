@@ -1,9 +1,9 @@
 # Architecture
 
-Crabnet is a Linux/Tokio TUN-over-UDP learning prototype with two deliberately separate tracks:
+Crabnet is a Linux/Tokio TUN-over-UDP learning prototype with two deliberately separate data paths:
 
-- an active version 1 packet-forwarding runtime; and
-- a Noise-IK handshake-only runtime that uses the V2 framing adapter and stops before data forwarding.
+- an active legacy version 1 packet-forwarding runtime; and
+- a Noise-IK runtime that authenticates the V2 handshake before forwarding encrypted data frames.
 
 ```text
 CLI/config
@@ -12,9 +12,10 @@ Application::bind
    ├─ Client
    │  ├─ resolve full-tunnel VPN-server underlay route
    │  └─ RouteManager::install → iproute2
-   ├─ NoiseIk handshake-only runtime
+   ├─ NoiseIk runtime
    │  ├─ UDP socket and V2 adapter
-   │  └─ Noise-IK coordinator
+   │  ├─ Noise-IK coordinator
+   │  └─ encrypted data session after commitment
    └─ Server
       ├─ FirewallDiagnostics → read-only nftables inspection
       ├─ NatManager::install → nftables
@@ -71,19 +72,16 @@ connect a reviewed protocol to the coordinator; fake crypto must never be used f
 - `src/handshake/types.rs`: transport-neutral messages, reports, events, and fatal errors.
 - `src/handshake/adapter.rs`: V2 decode, direction and exact-size validation, coordinator dispatch, and encoding.
 - `src/crypto/noise_ik/`: Noise-IK profile, key loading, and client/server providers.
-- `src/noise_runtime.rs`: handshake-only Tokio UDP runtime; it deliberately does not forward plaintext after establishment.
+- `src/noise_runtime.rs`: Tokio V2 runtime; it commits Noise-IK, creates the TUN, and then forwards only encrypted data frames.
 
-See [`handshake.md`](handshake.md) for the learning-oriented explanation and
-[`milestone-2.3-pure-handshake-coordination-design.md`](milestone-2.3-pure-handshake-coordination-design.md)
-for the exhaustive contract. [`diagrams.md`](diagrams.md) provides the current runtime, handshake,
+See [`handshake.md`](handshake.md) for the learning-oriented explanation and the coordinator contract. [`diagrams.md`](diagrams.md) provides the current runtime, handshake,
 state-machine, failure, and planned-integration views in one place.
 
 ## Current execution boundary
 
-Version 1 remains the active data protocol. Noise-IK is an explicit handshake-only mode: it validates
-and authenticates the four V2 handshake messages, then exits with a clear data-plane-not-implemented
-error rather than entering V1 forwarding. The pure subsystem nevertheless proves
-the intended four-message coordination:
+Version 1 remains an explicit legacy data protocol. Noise-IK validates and authenticates the
+four V2 handshake messages, then creates an encrypted data session rather than entering V1
+forwarding. The pure subsystem proves the intended four-message coordination:
 
 ```text
 ClientHello → ServerHello → ClientFinish → ServerFinish
@@ -94,17 +92,9 @@ crypto result correlations, commits identical authenticated metadata in policy a
 fails closed on local errors or invariant violations. Successful remote rejection is reported as a
 typed drop rather than a fatal local error.
 
-The next architecture boundary is the encrypted data protocol. The handshake runtime already owns the
-UDP adapter and coordinator lifecycle; it intentionally stops before TUN forwarding. The remaining
-work is directional data keys, nonces, replay windows, rekeying, and cancellation-aware session
-forwarding.
-
-The earlier pure-subsystem boundary was:
-
-1. define encrypted data-frame encoding and directional key/nonce state;
-2. add replay, duplicate, timeout, rekey, and shutdown handling;
-3. integrate established sessions with TUN forwarding; and
-4. add non-privileged runtime adapter tests before extending the namespace test.
+The encrypted data path owns frame encoding, header binding, sequence allocation, replay checks,
+and TUN/UDP forwarding after coordinator commitment. Rekeying, multi-peer routing, and a dedicated
+Noise-IK namespace test remain future work.
 
 The server intentionally supports one active UDP peer and has no authentication.
 This is a lab/test boundary, not a security boundary.

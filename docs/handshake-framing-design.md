@@ -6,7 +6,7 @@ Status: **implemented; codec, adapter, and handshake-only runtime integrated**
 
 This document is the implementation contract and progress checklist for Milestone 2.4. It defines
 a bounded, transport-facing byte envelope for the four handshake messages completed in Milestone
-2.3. The codec remains pure; the provider adapter and Noise-IK handshake-only runtime connect it to
+This handshake layer. The codec remains pure; the provider adapter and Noise-IK handshake-only runtime connect it to
 UDP. This document still does not define an encrypted data frame.
 
 The framing code must be deterministic, synchronous, allocation-free while decoding, and testable
@@ -46,7 +46,7 @@ used, it marks the pure Milestone 2.4 scope; unhighlighted nodes are context or 
 
 ```mermaid
 flowchart LR
-    subgraph Existing[Existing Milestone 2.3 pure handshake]
+    subgraph Existing[Existing Handshake subsystem]
         Coordinator[Handshake coordinator]
         Owned[Owned typed message]
         Coordinator <--> Owned
@@ -258,7 +258,7 @@ as local fatal failure; it cannot continue after losing a required outbound effe
 
 ```mermaid
 flowchart LR
-    M23[2.3<br/>Pure coordinator and fake crypto<br/>complete]
+    Handshake[Coordinator and provider handshake messages<br/>complete]
     M241[2.4.1<br/>Approve outer byte contract]
     M242[2.4.2 to 2.4.5<br/>Pure codec and classifiers]
     M246[2.4.6 to 2.4.8<br/>Compatibility, docs, checks]

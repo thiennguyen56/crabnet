@@ -70,7 +70,7 @@ impl Application {
 
     if security.mode == SecurityMode::NoiseIk {
       return Ok(Self::NoiseIk {
-        runtime: Box::new(NoiseIkRuntime::bind(mode, security).await?),
+        runtime: Box::new(NoiseIkRuntime::bind(mode, security, tun).await?),
       });
     }
 

@@ -54,6 +54,19 @@ impl ClientProvider {
       context: None,
     }
   }
+  pub(crate) fn into_established_transport(
+    self,
+  ) -> Option<(StatelessTransportState, EstablishedSessionMetadata)> {
+    match self.context {
+      Some(Context::Established {
+        transport,
+        metadata,
+        ..
+      }) if self.phase == ClientCryptoPhase::Established => Some((transport, metadata)),
+      _ => None,
+    }
+  }
+
   fn fail(op: ClientCryptoOperation) -> CryptoStateError {
     CryptoStateError::NoiseIkFailure { operation: op }
   }

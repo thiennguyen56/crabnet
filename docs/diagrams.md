@@ -6,63 +6,51 @@ remain reviewable as text.
 The most important boundary is repeated throughout this page:
 
 - version 1 packet forwarding remains an explicit unauthenticated runtime mode; and
-- Noise-IK handshake framing and provider dispatch run in a separate handshake-only runtime that stops before data forwarding.
+- Noise-IK commits the V2 handshake before it creates a TUN and forwards encrypted data frames. It never falls back to V1 plaintext.
 
 ## 1. System context and implementation status
 
 ```mermaid
 flowchart LR
-    subgraph Runtime[Legacy V1 data runtime]
-        ClientOS[Client OS]
-        ClientTun[Client TUN]
-        ClientRuntime[Crabnet client]
-        UDP[UDP underlay]
-        ServerRuntime[Crabnet server]
-        ServerTun[Server TUN]
-        ServerOS[Server OS routing]
-
-        ClientOS --> ClientTun --> ClientRuntime --> UDP --> ServerRuntime --> ServerTun --> ServerOS
-        ServerOS --> ServerTun --> ServerRuntime --> UDP --> ClientRuntime --> ClientTun --> ClientOS
+    subgraph Legacy[Legacy V1 runtime - explicit unauthenticated mode]
+        LegacyClientOS[Client OS] --> LegacyClientTun[Client TUN]
+        LegacyClientTun --> LegacyClient[Crabnet client]
+        LegacyClient --> LegacyUdp[UDP underlay]
+        LegacyUdp --> LegacyServer[Crabnet server]
+        LegacyServer --> LegacyServerTun[Server TUN] --> LegacyServerOS[Server OS routing]
     end
 
-    subgraph Noise[Noise-IK handshake-only runtime]
-        NoiseClient[UDP client adapter]
-        NoiseCodec[V2 codec + exact-size checks]
-        NoiseProvider[Noise-IK provider + coordinator]
-        NoiseClient --> NoiseCodec --> NoiseProvider
+    subgraph Noise[Noise-IK V2 runtime - encrypted after commitment]
+        NoiseClientTun[Client TUN]
+        NoiseClient[Client runtime]
+        Handshake[Bounded V2 handshake plus Noise-IK coordinator]
+        EncryptedUdp[Encrypted V2 data datagrams]
+        NoiseServer[Server runtime]
+        NoiseServerTun[Server TUN]
+
+        NoiseClientTun --> NoiseClient
+        NoiseClient --> Handshake
+        Handshake -->|matching committed metadata and transport| EncryptedUdp
+        NoiseClient -->|ClientToServer encrypted frame| EncryptedUdp
+        EncryptedUdp -->|ServerToClient encrypted frame| NoiseClient
+        EncryptedUdp --> NoiseServer
+        NoiseServer --> NoiseServerTun
     end
 
-    subgraph Pure[Completed pure subsystem - tests only]
-        ClientPolicy[Client policy]
-        ClientCoordinator[Client coordinator]
-        FakeClientCrypto[Fake client crypto]
-        OwnedMessages[Owned handshake messages]
-        ServerCoordinator[Server coordinator]
-        ServerPolicy[Server policy]
-        FakeServerCrypto[Fake server crypto]
-
-        ClientPolicy <--> ClientCoordinator
-        FakeClientCrypto <--> ClientCoordinator
-        ClientCoordinator <--> OwnedMessages <--> ServerCoordinator
-        ServerCoordinator <--> ServerPolicy
-        ServerCoordinator <--> FakeServerCrypto
+    subgraph Pure[Pure, privilege-free tests]
+        Frame[Frame codec and header binding]
+        Replay[Sequence allocation and replay window]
+        Providers[Handshake coordinators and providers]
+        Frame <--> Replay
+        Providers --> Frame
     end
 
-    subgraph Future[Not implemented]
-        RealProtocol[Reviewed protocol or library]
-        WireCodec[Version 2 wire codec]
-        RuntimeAdapter[Tokio transport adapter]
-        EncryptedData[Encrypted and replay-protected data]
-
-        RealProtocol --> WireCodec --> RuntimeAdapter --> EncryptedData
-    end
-
-    Pure -. design contract for .-> Future
-    Future -. will eventually gate .-> Runtime
+    Pure -. verifies policy used by .-> Noise
 ```
 
-The Noise subgraph is current handshake-only runtime behavior. The dashed Future arrows are roadmap
-boundaries for encrypted data forwarding; the executable does not enter that path yet.
+Noise-IK selects the encrypted path only after both coordinators commit matching session metadata.
+Malformed, unknown-session, wrong-direction, authentication-failed, and replayed datagrams are
+dropped; local I/O, crypto, or invariant failures stop the session.
 
 ## 2. Active version 1 packet flow
 
@@ -244,52 +232,54 @@ Remote authentication failure is ordinary hostile input when its domain and IDs 
 provider returning the wrong failure variant or wrong correlation is a local contract violation and
 therefore fatal.
 
-## 7. V2 Noise-IK handshake runtime
+## 7. V2 Noise-IK handshake-to-data runtime
 
 ```mermaid
 flowchart LR
-    Datagram[Untrusted UDP datagram]
-    Parser[Bounded version 2 parser]
+    Datagram[Untrusted UDP handshake datagram]
+    Parser[Bounded V2 parser]
     Message[Owned handshake message]
-    Coordinator[Pure coordinator]
+    Coordinator[Noise-IK coordinator and provider]
     Report[Outbound messages and events]
-    Serializer[Version 2 serializer]
+    Serializer[V2 handshake serializer]
     Socket[Tokio UDP socket]
     Deadline[Nearest coordinator deadline]
-    Stop[Stop before encrypted data plane]
+    Established[SessionEstablished with metadata]
+    Tun[Create configured TUN]
+    Transport[Extract committed directional transport]
+    DataRuntime[Encrypted V2 forwarding loop]
 
     Datagram --> Parser --> Message --> Coordinator --> Report --> Serializer --> Socket
     Deadline --> Coordinator
-    Report -->|SessionEstablished| Stop
+    Report -->|SessionEstablished| Established
+    Established --> Tun --> Transport --> DataRuntime
 ```
 
-The current adapter keeps parsing, socket I/O, timers, and cancellation outside the pure coordinator.
-It does not hold a coordinator borrow across `.await`, and it stops after both confirmation messages establish authenticated session state.
+The adapter keeps parsing, socket I/O, timers, and cancellation outside the pure coordinator. It does
+not hold a coordinator borrow across `.await`. The runtime creates a TUN and enters encrypted
+forwarding only after it extracts a transport whose committed metadata exactly matches the event.
 
-## 8. V2 frame validation and dispatch
+## 8. V2 handshake framing validation and dispatch
 
 ```mermaid
 flowchart TD
-    Datagram[UDP datagram] --> Decode[Decode V2 frame]
-    Decode -->|Malformed| RejectDecode[Reject before coordinator]
+    Datagram[UDP handshake datagram] --> Decode[Decode V2 frame]
+    Decode -->|Malformed| RejectDecode[Drop before coordinator]
     Decode --> Direction[Classify direction and message type]
-    Direction -->|Wrong role or version| RejectDirection[Reject before provider]
+    Direction -->|Wrong role or version| RejectDirection[Drop before provider]
     Direction --> Size[Check exact Noise-IK payload size]
-    Size -->|112 ClientHello| CopyHello[Copy into NoiseIkPayload]
-    Size -->|64 ServerHello| CopyServerHello[Copy into NoiseIkPayload]
-    Size -->|32 ClientFinish or ServerFinish| CopyFinish[Copy into NoiseIkPayload]
-    Size -->|Any other length| RejectSize[Reject before Noise]
-    CopyHello --> Dispatch[Dispatch to matching coordinator]
-    CopyServerHello --> Dispatch
-    CopyFinish --> Dispatch
+    Size -->|Expected size| Copy[Copy into NoiseIkPayload]
+    Size -->|Any other size| RejectSize[Drop before Noise]
+    Copy --> Dispatch[Dispatch to matching coordinator]
     Dispatch --> Provider[Noise-IK provider]
     Provider --> Report[Coordinator report]
-    Report --> Encode[Encode returned ciphertext without inspection]
+    Report --> Encode[Encode returned opaque handshake payload]
     Encode --> Send[UDP send]
-    Report -->|SessionEstablished| Stop[Stop: encrypted data plane pending]
+    Report -->|SessionEstablished| Data[Start encrypted V2 data runtime]
 ```
 
-The adapter rejects malformed, misdirected, and incorrectly sized frames before mutating provider state. It owns the borrowed-to-owned payload boundary; the provider receives only `NoiseIkPayload`. Returned provider bytes are treated as opaque and are only placed into the V2 envelope for transmission.
+The adapter rejects malformed, misdirected, and incorrectly sized frames before mutating provider state.
+It owns the borrowed-to-owned payload boundary; the provider receives only `NoiseIkPayload`.
 
 ## 9. V2 Noise-IK message exchange
 
@@ -330,6 +320,44 @@ sequenceDiagram
     U->>C: Receive datagram
     C->>CA: Decode, classify, size-check, copy payload
     CA->>CP: receive_server_finish and commit
-    CP-->>C: SessionEstablished
-    Note over C,S: Runtime stops; encrypted data forwarding is not implemented
+    CP-->>C: SessionEstablished with matching metadata
+    Note over C,S: Both runtimes extract committed transport and create their configured TUN
+    C->>U: Encrypted V2 ClientToServer data frame
+    U->>S: Receive, authenticate, replay-check, and inject inner packet
+    S->>U: Encrypted V2 ServerToClient data frame
+    U->>C: Receive, authenticate, replay-check, and inject inner packet
 ```
+
+
+## 10. Encrypted V2 data-frame decisions
+
+```mermaid
+flowchart TD
+    TunRead[Read raw packet from TUN] --> LocalSize{Non-empty and within MTU?}
+    LocalSize -->|No| LocalDrop[Drop invalid local packet]
+    LocalSize -->|Yes| Sequence[Allocate one send sequence]
+    Sequence --> Header[Build canonical 51-byte header]
+    Header --> Encrypt[Encrypt header plus raw packet]
+    Encrypt --> Send[Require complete UDP send]
+
+    UdpRead[Receive UDP datagram into max plus one buffer] --> DatagramSize{Within configured maximum?}
+    DatagramSize -->|No| OversizeDrop[Drop oversized datagram]
+    DatagramSize -->|Yes| Decode[Decode fixed V2 data header]
+    Decode -->|Malformed| MalformedDrop[Drop malformed frame]
+    Decode --> Session{Endpoint and session ID match?}
+    Session -->|No| UnknownDrop[Drop unknown session]
+    Session -->|Yes| Direction{Expected direction?}
+    Direction -->|No| DirectionDrop[Drop wrong direction]
+    Direction -->|Yes| Replay{Unseen and within replay window?}
+    Replay -->|No| ReplayDrop[Drop duplicate or too-old sequence]
+    Replay -->|Yes| Decrypt[Decrypt using sequence-mapped nonce]
+    Decrypt -->|Auth or header failure| AuthDrop[Drop unauthenticated datagram]
+    Decrypt -->|Plaintext| Commit[Commit replay sequence]
+    Commit --> Inner{Non-empty and within MTU?}
+    Inner -->|No| InnerDrop[Drop invalid authenticated inner packet]
+    Inner -->|Yes| TunWrite[Require complete TUN write]
+```
+
+Only the local I/O, frame-construction, transport-provider, replay-invariant, and partial-write
+failures are fatal. Every malformed or hostile remote datagram is dropped and cannot replace
+the committed single-peer session.

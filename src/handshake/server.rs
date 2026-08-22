@@ -67,6 +67,10 @@ where
     })
   }
 
+  pub(crate) fn into_crypto(self) -> C {
+    self.crypto
+  }
+
   pub(crate) fn receive_client_hello(
     &mut self,
     source: SocketAddr,
