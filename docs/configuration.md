@@ -8,8 +8,8 @@ data path. `noise_ik` loads real static key material, performs the V2 Noise-IK h
 forwards only authenticated encrypted V2 data frames.
 
 The namespace-lab sample files intentionally select `legacy` because `scripts/test-local-tunnel.sh`
-tests the V1 TUN/UDP forwarding, routing, and NAT path. A dedicated Noise-IK namespace scenario
-remains to be added.
+tests the V1 TUN/UDP forwarding, routing, and NAT path. `scripts/test-noise-ik-tunnel.sh` separately
+tests the Noise-IK encrypted overlay path.
 
 ## Loading and CLI overrides
 
@@ -161,8 +161,9 @@ The file must not be readable by group or other users. Clients require one pinne
 servers require at least one unique allowed client public key. Noise-IK configuration is validated
 before any TUN, route, NAT, or forwarding state is created.
 
-Noise-IK currently performs only the authenticated handshake over UDP and exits before packet
-forwarding. It must not be used as a claim that V1 data frames are authenticated or encrypted.
+Noise-IK creates the configured TUN and applies the same client routes or server forwarding/NAT
+configuration as legacy mode. It forwards only committed encrypted V2 data; this does not make V1
+data frames authenticated or encrypted.
 
 ### Generating local Noise-IK keys
 

@@ -97,7 +97,7 @@ sudo scripts/test-noise-ik-tunnel.sh
 ```
 
 It generates throwaway static keys beneath its printed log directory, commits a real Noise-IK
-handshake, creates both TUN interfaces only after commitment, proves encrypted overlay ping, injects
+handshake, uses the application-owned TUN interfaces, proves encrypted overlay ping, injects
 a malformed UDP datagram, verifies its drop in the server log, and proves the established session
 still delivers packets. It does not change host routes, forwarding, or firewall state.
 

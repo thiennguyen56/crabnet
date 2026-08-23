@@ -6,7 +6,7 @@ remain reviewable as text.
 The most important boundary is repeated throughout this page:
 
 - version 1 packet forwarding remains an explicit unauthenticated runtime mode; and
-- Noise-IK commits the V2 handshake before it creates a TUN and forwards encrypted data frames. It never falls back to V1 plaintext.
+- Noise-IK creates its configured TUN and installs owned networking during binding, but forwards encrypted data frames only after it commits the V2 handshake. It never falls back to V1 plaintext.
 
 ## 1. System context and implementation status
 
@@ -245,19 +245,21 @@ flowchart LR
     Socket[Tokio UDP socket]
     Deadline[Nearest coordinator deadline]
     Established[SessionEstablished with metadata]
-    Tun[Create configured TUN]
+    Tun[Application-owned configured TUN and routes]
     Transport[Extract committed directional transport]
     DataRuntime[Encrypted V2 forwarding loop]
 
     Datagram --> Parser --> Message --> Coordinator --> Report --> Serializer --> Socket
     Deadline --> Coordinator
     Report -->|SessionEstablished| Established
-    Established --> Tun --> Transport --> DataRuntime
+    Tun --> Coordinator
+    Established --> Transport --> DataRuntime
 ```
 
 The adapter keeps parsing, socket I/O, timers, and cancellation outside the pure coordinator. It does
-not hold a coordinator borrow across `.await`. The runtime creates a TUN and enters encrypted
-forwarding only after it extracts a transport whose committed metadata exactly matches the event.
+not hold a coordinator borrow across `.await`. Application binding owns the configured TUN plus routes/NAT;
+the runtime enters encrypted forwarding only after it extracts a transport whose committed metadata exactly
+matches the event.
 
 ## 8. V2 handshake framing validation and dispatch
 

@@ -21,7 +21,7 @@ use crate::routing::{
   RouteManager, RoutingConfig, TokioCommandRunner,
 };
 use crate::server::{Server, ServerConfig};
-use crate::tun::TunConfig;
+use crate::tun::{TunConfig, TunDevice};
 
 type LinuxRouteManager = RouteManager<LinuxRouteBackend<TokioCommandRunner>>;
 type ClientRouteManager = LinuxRouteManager;
@@ -47,8 +47,21 @@ pub enum Application {
     /// Manager that restores that Crabnet-owned nftables tables.
     nat: LinuxNatManager,
   },
-  NoiseIk {
+  /// Noise-IK client runtime and its installed routes.
+  NoiseIkClient {
+    /// Authenticated encrypted client runtime.
     runtime: Box<NoiseIkRuntime>,
+    /// Manager that restores client routes on shutdown.
+    routes: ClientRouteManager,
+  },
+  /// Noise-IK server runtime and its installed networking state.
+  NoiseIkServer {
+    /// Authenticated encrypted server runtime.
+    runtime: Box<NoiseIkRuntime>,
+    /// Manager that restores server routes and forwarding state on shutdown.
+    routing: ServerRouteManager,
+    /// Manager that restores Crabnet-owned nftables state.
+    nat: LinuxNatManager,
   },
 }
 
@@ -69,9 +82,7 @@ impl Application {
     } = config;
 
     if security.mode == SecurityMode::NoiseIk {
-      return Ok(Self::NoiseIk {
-        runtime: Box::new(NoiseIkRuntime::bind(mode, security, tun).await?),
-      });
+      return bind_noise_ik(mode, security, tun, routing).await;
     }
 
     match mode {
@@ -177,10 +188,119 @@ impl Application {
 
         combine_run_and_cleanup("server", run_result, cleanup_result)?;
       }
-      Self::NoiseIk { runtime } => runtime.run().await?,
+      Self::NoiseIkClient {
+        runtime,
+        mut routes,
+      } => {
+        let run_result = runtime.run().await;
+        let cleanup_result = routes.restore().await;
+        combine_run_and_cleanup("Noise-IK client", run_result, cleanup_result)?;
+      }
+      Self::NoiseIkServer {
+        runtime,
+        mut routing,
+        mut nat,
+      } => {
+        let run_result = runtime.run().await;
+        let routing_cleanup = routing.restore().await;
+        let nat_cleanup = nat.restore().await;
+        let cleanup_result = combine_cleanup_results(
+          "Noise-IK server routing",
+          routing_cleanup,
+          "Noise-IK server NAT",
+          nat_cleanup,
+        );
+        combine_run_and_cleanup("Noise-IK server", run_result, cleanup_result)?;
+      }
     }
 
     Ok(())
+  }
+}
+
+/// Binds the authenticated runtime while preserving the normal route and NAT lifecycle.
+async fn bind_noise_ik(
+  mode: ModeConfig,
+  security: crate::config::SecurityConfig,
+  tun: TunConfig,
+  routing: RoutingConfig,
+) -> anyhow::Result<Application> {
+  match mode {
+    ModeConfig::Client {
+      bind_addr,
+      server_addr,
+    } => {
+      let tun_name = tun.name.clone();
+      let tun_address = tun.address;
+      let tun_device = TunDevice::create(&tun)
+        .with_context(|| format!("create Noise-IK client TUN {tun_name}"))?;
+      let runtime = NoiseIkRuntime::bind(
+        ModeConfig::Client {
+          bind_addr,
+          server_addr,
+        },
+        security,
+        tun_device,
+      )
+      .await?;
+
+      let mut backend = LinuxRouteBackend::new(TokioCommandRunner);
+      let operations = if routing.full_tunnel {
+        let underlay = backend
+          .resolve_underlay_route(server_addr.ip())
+          .await
+          .context("failed to resolve VPN server underlay route")?;
+        full_tunnel_operations(&tun_name, tun_address, server_addr.ip(), &underlay)?
+      } else {
+        split_tunnel_operations(&routing, &tun_name)
+      };
+      let mut routes = RouteManager::new(backend);
+      routes
+        .install(&operations)
+        .await
+        .context("failed to install Noise-IK client routes")?;
+
+      Ok(Application::NoiseIkClient {
+        runtime: Box::new(runtime),
+        routes,
+      })
+    }
+    ModeConfig::Server { bind_addr } => {
+      run_server_firewall_diagnostics(&tun, &routing).await;
+      let nat_spec = build_nat_spec(&tun, &routing)?;
+      let tun_name = tun.name.clone();
+      let tun_device = TunDevice::create(&tun)
+        .with_context(|| format!("create Noise-IK server TUN {tun_name}"))?;
+      let runtime =
+        NoiseIkRuntime::bind(ModeConfig::Server { bind_addr }, security, tun_device).await?;
+      let mut nat = NatManager::new(LinuxNatBackend::new(TokioNatCommandRunner));
+
+      if let Some(spec) = nat_spec.as_ref() {
+        nat
+          .install(spec)
+          .await
+          .context("failed to configure Noise-IK server NAT")?;
+      }
+
+      let operations = server_operations(&routing);
+      let backend = LinuxRouteBackend::new(TokioCommandRunner);
+      let mut route_manager = RouteManager::new(backend);
+      if let Err(routing_error) = route_manager.install(&operations).await {
+        let nat_cleanup = nat.restore().await;
+        return match nat_cleanup {
+          Ok(()) => Err(routing_error.context("failed to configure Noise-IK server networking")),
+          Err(nat_error) => Err(routing_error.context(format!(
+            "failed to configure Noise-IK server networking; NAT rollback also failed: {nat_error:#}"
+          ))),
+        };
+      }
+
+      Ok(Application::NoiseIkServer {
+        runtime: Box::new(runtime),
+        routing: route_manager,
+        nat,
+      })
+    }
   }
 }
 

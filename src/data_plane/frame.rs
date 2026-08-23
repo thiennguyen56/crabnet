@@ -19,7 +19,7 @@ const MAX_SEQUENCE: u64 = u64::MAX - 1;
 const UDP_PAYLOAD_CEILING: usize = 65_507;
 
 const DATA_AEAD_TAG_LENGTH: usize = crate::crypto::noise_ik::profile::AEAD_TAG_LENGTH;
-const DATA_TRANSPORT_OVERHEAD: usize = DATA_AEAD_TAG_LENGTH;
+const DATA_TRANSPORT_OVERHEAD: usize = DATA_HEADER_LENGTH + DATA_AEAD_TAG_LENGTH;
 const MINIMUM_DATA_CIPHERTEXT_LENGTH: usize = DATA_TRANSPORT_OVERHEAD + 1;
 
 const MAGIC: [u8; 4] = *b"CRBN";
@@ -424,7 +424,7 @@ mod tests {
       Err(_) => panic!("encoded frame must decode"),
     };
 
-    assert_eq!(decoded.header.body_length, 58);
+    assert_eq!(decoded.header.body_length, 109);
     assert_eq!(decoded.header.session_id, SessionId::from_u64(7));
     assert_eq!(decoded.header.direction, DataDirection::ClientToServer);
     assert_eq!(decoded.header.sequence, 1);

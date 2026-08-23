@@ -704,8 +704,8 @@ RUN_ENCRYPTED_SESSION(runtime)
 ```text
 startup
   -> validate TunConfig and build codec from usize::from(TunConfig.mtu)
+  -> Application creates the configured TUN and installs owned networking state
   -> run Noise-IK handshake and commit matching metadata
-  -> create TUN only after handshake commit; its mtu must match codec maximum plaintext
   -> derive directional transport and create one established session
   -> register the session and start encrypted runtime
 

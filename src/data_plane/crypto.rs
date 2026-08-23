@@ -37,7 +37,7 @@ impl DirectionalTransport {
       vec![0_u8; payload.len() + crate::crypto::noise_ik::profile::AEAD_TAG_LENGTH];
     let length = self
       .state
-      .write_message(sequence - 1, &payload, &mut ciphertext)
+      .write_message(sequence, &payload, &mut ciphertext)
       .map_err(|_| TransportError::Encrypt)?;
     ciphertext.truncate(length);
     Ok(ciphertext)
@@ -52,7 +52,7 @@ impl DirectionalTransport {
     let mut plaintext = vec![0_u8; ciphertext.len()];
     let length = match self
       .state
-      .read_message(sequence - 1, ciphertext, &mut plaintext)
+      .read_message(sequence, ciphertext, &mut plaintext)
     {
       Ok(length) => length,
       Err(_) => return DecryptOutcome::AuthenticationFailure,

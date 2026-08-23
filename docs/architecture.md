@@ -72,7 +72,7 @@ connect a reviewed protocol to the coordinator; fake crypto must never be used f
 - `src/handshake/types.rs`: transport-neutral messages, reports, events, and fatal errors.
 - `src/handshake/adapter.rs`: V2 decode, direction and exact-size validation, coordinator dispatch, and encoding.
 - `src/crypto/noise_ik/`: Noise-IK profile, key loading, and client/server providers.
-- `src/noise_runtime.rs`: Tokio V2 runtime; it commits Noise-IK, creates the TUN, and then forwards only encrypted data frames.
+- `src/noise_runtime.rs`: Tokio V2 runtime; it commits Noise-IK and then forwards only encrypted data frames using the TUN owned by `Application`.
 
 See [`handshake.md`](handshake.md) for the learning-oriented explanation and the coordinator contract. [`diagrams.md`](diagrams.md) provides the current runtime, handshake,
 state-machine, failure, and planned-integration views in one place.
@@ -80,7 +80,7 @@ state-machine, failure, and planned-integration views in one place.
 ## Current execution boundary
 
 Version 1 remains an explicit legacy data protocol. Noise-IK validates and authenticates the
-four V2 handshake messages, then creates an encrypted data session rather than entering V1
+four V2 handshake messages, then starts an encrypted data session rather than entering V1
 forwarding. The pure subsystem proves the intended four-message coordination:
 
 ```text
@@ -96,8 +96,9 @@ The encrypted data path owns frame encoding, header binding, sequence allocation
 and TUN/UDP forwarding after coordinator commitment. Rekeying, multi-peer routing, and a dedicated
 Noise-IK namespace test remain future work.
 
-The server intentionally supports one active UDP peer and has no authentication.
-This is a lab/test boundary, not a security boundary.
+The legacy V1 server intentionally supports one active UDP peer and has no authentication.
+Noise-IK also supports one active peer, but authenticates it with the configured public-key allowlist.
+Both are lab/test boundaries, not production-security claims.
 
 For a full-tunnel client, route setup is intentionally ordered. Crabnet resolves
 the VPN server's route before installing any routes, installs a host route for

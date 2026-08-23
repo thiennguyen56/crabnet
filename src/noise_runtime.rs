@@ -29,7 +29,7 @@ use crate::{
   },
   protocol::v2::V2HandshakeCodec,
   session::{client::ClientHandshake, server::ServerHandshake, SessionPolicy},
-  tun::{TunConfig, TunDevice},
+  tun::TunDevice,
 };
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,12 +50,12 @@ pub(crate) enum NoiseIkRuntime {
     socket: UdpSocket,
     server_addr: SocketAddr,
     coordinator: Box<ClientHandshakeCoordinator<ClientProvider>>,
-    tun: TunConfig,
+    tun: TunDevice,
   },
   Server {
     socket: UdpSocket,
     coordinator: Box<ServerHandshakeCoordinator<ServerProvider>>,
-    tun: TunConfig,
+    tun: TunDevice,
   },
 }
 
@@ -63,7 +63,7 @@ impl NoiseIkRuntime {
   pub(crate) async fn bind(
     mode: ModeConfig,
     security: SecurityConfig,
-    tun: TunConfig,
+    tun: TunDevice,
   ) -> anyhow::Result<Self> {
     let private_path = security
       .private_key_path
@@ -190,11 +190,8 @@ impl NoiseIkRuntime {
                 "client Noise-IK coordinator metadata did not match committed transport"
               ));
             }
-            let codec = DataFrameCodec::new(usize::from(tun.mtu))
+            let codec = DataFrameCodec::new(tun.mtu())
               .map_err(|error| anyhow::anyhow!("configure encrypted data codec: {error:?}"))?;
-            let tun_name = tun.name.clone();
-            let tun = TunDevice::create(&tun)
-              .with_context(|| format!("create client TUN {tun_name} after Noise-IK handshake"))?;
             let session = EstablishedDataSession::client(
               metadata,
               server_addr,
@@ -274,11 +271,8 @@ impl NoiseIkRuntime {
                 "server Noise-IK coordinator metadata did not match committed transport"
               ));
             }
-            let codec = DataFrameCodec::new(usize::from(tun.mtu))
+            let codec = DataFrameCodec::new(tun.mtu())
               .map_err(|error| anyhow::anyhow!("configure encrypted data codec: {error:?}"))?;
-            let tun_name = tun.name.clone();
-            let tun = TunDevice::create(&tun)
-              .with_context(|| format!("create server TUN {tun_name} after Noise-IK handshake"))?;
             let session = EstablishedDataSession::server(
               metadata,
               peer_endpoint,
