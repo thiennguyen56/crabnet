@@ -1,5 +1,11 @@
 [advisories]
 version = 2
+# `tun-rs` currently reaches this unmaintained crate through `netconfig-rs`.
+# The latest compatible `tun-rs` release retains that dependency; revisit when
+# its dependency graph no longer contains `paste`.
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "transitive through tun-rs; RustSec reports no safe upgrade" },
+]
 
 [licenses]
 version = 2
@@ -13,6 +19,11 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
+
+# Crabnet is an unpublished learning prototype. Do not assign a license until
+# the project owner selects one; third-party dependency licenses remain checked.
+[licenses.private]
+ignore = true
 
 [bans]
 multiple-versions = "warn"
