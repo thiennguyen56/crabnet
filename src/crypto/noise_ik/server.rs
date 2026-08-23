@@ -54,6 +54,23 @@ impl ServerProvider {
       established: None,
     }
   }
+  pub(crate) fn into_established_transport(
+    self,
+  ) -> Option<(StatelessTransportState, EstablishedSessionMetadata)> {
+    if self.phase != ServerCryptoPhase::Established {
+      return None;
+    }
+    let (_, context) = self.established?;
+    match context {
+      CandidateContext::Established {
+        transport,
+        metadata,
+        ..
+      } => Some((transport, metadata)),
+      CandidateContext::Pending { .. } => None,
+    }
+  }
+
   fn fail(op: ServerCryptoOperation) -> CryptoStateError {
     CryptoStateError::NoiseIkServerFailure { operation: op }
   }

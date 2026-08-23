@@ -5,9 +5,9 @@ internet-facing path. The private-service test covers full-tunnel selection,
 server routing, IPv4 forwarding, and source NAT. General internet use remains
 future work because firewall policy and full-tunnel DNS are not managed.
 
-The packet-path diagrams show the legacy unauthenticated V1 runtime. Noise-IK is a separate
-handshake-only runtime path: it exchanges and authenticates V2 handshake frames, then stops before
-TUN creation and packet forwarding. These diagrams must not be read as encrypted tunnels.
+The packet-path diagrams below show the legacy unauthenticated V1 runtime. Noise-IK is a separate
+encrypted V2 path: it commits the V2 handshake, creates a TUN, and forwards header-bound,
+direction-bound, replay-checked data frames. These routing diagrams do not yet exercise that path.
 
 ## Private service routing
 
@@ -94,6 +94,4 @@ path requires:
 
 - administrator-managed firewall forwarding policy;
 - full-tunnel DNS handling; and
-- a reviewed version 2 handshake and encrypted data protocol;
-- runtime integration that gates forwarding on established session metadata; and
-- authentication, replay protection, and rekeying before use on untrusted networks.
+- rekeying, adversarial integration tests, and multi-peer design before use on untrusted networks.

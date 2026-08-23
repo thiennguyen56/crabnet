@@ -638,20 +638,19 @@ impl ServerHandshake {
         }],
       }),
       ServerHandshakeState::Listening => {
-        let reason: ServerDropReason;
-        if observed == ServerInboundKind::Data {
-          reason = ServerDropReason::PreSessionData;
+        let reason = if observed == ServerInboundKind::Data {
+          ServerDropReason::PreSessionData
         } else if self.current_candidate(source)?.is_some() {
-          reason = ServerDropReason::UnexpectedMessage {
+          ServerDropReason::UnexpectedMessage {
             expected: Some(ServerInboundKind::ClientFinish),
             observed,
-          };
+          }
         } else {
-          reason = ServerDropReason::UnexpectedMessage {
+          ServerDropReason::UnexpectedMessage {
             expected: Some(ServerInboundKind::ClientHello),
             observed,
-          };
-        }
+          }
+        };
 
         Ok(ServerReport {
           expired,

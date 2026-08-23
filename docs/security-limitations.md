@@ -2,16 +2,14 @@
 
 Crabnet is not production-safe at the current milestone.
 
-The pure fake-crypto handshake and V2 byte-envelope codec are software-design test boundaries, not
-a deployed security boundary. The fake provider uses deterministic non-cryptographic proofs, the
-codec does not authenticate its outer fields or opaque payload, and neither subsystem is called by
-the executable.
+The fake-crypto handshake remains a software-design test boundary. The executable uses the real
+Noise-IK provider and encrypted V2 data frames, but that does not make Crabnet production-safe.
 
-- Legacy V1 UDP data traffic is unauthenticated; Noise-IK handshake traffic is authenticated but has no data plane yet.
-- Inner packets are not encrypted.
+- Legacy V1 UDP data traffic is unauthenticated and unencrypted; committed Noise-IK V2 data traffic is encrypted and replay checked.
+- Legacy V1 inner packets are not encrypted; V2 inner packets are encrypted and bind the complete data header.
 - Legacy mode has one active peer and no identity verification; Noise-IK server mode uses an explicit public-key allowlist.
 - A peer can still be selected by sending the first valid version 1 frame in legacy mode.
-- There is no encrypted data framing, replay protection, sequence validation, or key rotation.
+- Noise-IK V2 has encrypted data framing, sequence validation, and replay protection, but no key rotation.
 - IPv4 masquerading is implemented, but firewall-policy automation is not.
 - Startup firewall diagnostics inspect only IPv4-relevant nftables forward
   base-chain declarations. They do not evaluate individual rules, legacy

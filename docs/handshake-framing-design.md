@@ -2,12 +2,12 @@
 
 Milestone tracked: **2.4**
 
-Status: **implemented; codec, adapter, and handshake-only runtime integrated**
+Status: **implemented; codec and adapter integrated with the encrypted Noise-IK runtime**
 
 This document is the implementation contract and progress checklist for Milestone 2.4. It defines
 a bounded, transport-facing byte envelope for the four handshake messages completed in Milestone
-2.3. The codec remains pure; the provider adapter and Noise-IK handshake-only runtime connect it to
-UDP. This document still does not define an encrypted data frame.
+The codec remains pure; the provider adapter and Noise-IK runtime connect it to UDP. Encrypted data
+framing is defined separately in `encrypted-v2-data-plane-design.md`.
 
 The framing code must be deterministic, synchronous, allocation-free while decoding, and testable
 without Tokio, sockets, TUN devices, root, or network namespaces.
@@ -46,7 +46,7 @@ used, it marks the pure Milestone 2.4 scope; unhighlighted nodes are context or 
 
 ```mermaid
 flowchart LR
-    subgraph Existing[Existing Milestone 2.3 pure handshake]
+    subgraph Existing[Existing Handshake subsystem]
         Coordinator[Handshake coordinator]
         Owned[Owned typed message]
         Coordinator <--> Owned
@@ -258,7 +258,7 @@ as local fatal failure; it cannot continue after losing a required outbound effe
 
 ```mermaid
 flowchart LR
-    M23[2.3<br/>Pure coordinator and fake crypto<br/>complete]
+    Handshake[Coordinator and provider handshake messages<br/>complete]
     M241[2.4.1<br/>Approve outer byte contract]
     M242[2.4.2 to 2.4.5<br/>Pure codec and classifiers]
     M246[2.4.6 to 2.4.8<br/>Compatibility, docs, checks]
@@ -1006,7 +1006,7 @@ pass and client/server runtime files have no behavioral diff.
 - [x] Update protocol, testing, architecture, README, and security wording after implementation.
 
 Failure: any document says authenticated, encrypted, connected, or production-ready. Acceptance:
-all current docs distinguish pure framing from the integrated Noise-IK handshake-only runtime.
+current docs distinguish pure framing from the integrated Noise-IK encrypted runtime.
 
 ### 2.4.8 Run the unprivileged gate
 

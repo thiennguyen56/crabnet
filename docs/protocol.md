@@ -1,13 +1,13 @@
 # Current protocol
 
-This document distinguishes the legacy data protocol from the integrated Noise-IK handshake-only runtime:
+This document distinguishes the legacy data protocol from the integrated Noise-IK encrypted runtime:
 
 | Protocol layer | Status |
 | --- | --- |
 | Version 1 data frame below | Implemented and used by the executable |
 | Four-message fake handshake | Implemented only as owned in-memory Rust values |
-| Version 2 handshake framing codec | Implemented and used by the Noise-IK handshake-only runtime |
-| Authenticated and encrypted runtime protocol | Not implemented |
+| Version 2 handshake framing codec | Implemented and used by the Noise-IK runtime |
+| Authenticated encrypted V2 data protocol | Implemented for one committed Noise-IK peer |
 
 Crabnet transports one raw inner IP packet in one version 1 data frame carried
 by one UDP datagram. The frame distinguishes Crabnet traffic, enforces explicit
@@ -103,20 +103,17 @@ unregistered server can still select the single peer and inject inner packets.
 
 Current limitations are:
 
-- Noise-IK is handshake-only and does not forward data after establishment;
+- Noise-IK V2 data is encrypted, header-bound, direction-bound, and replay checked after establishment;
 - legacy V1 data remains unauthenticated and unencrypted;
-- no replay protection;
 - no key rotation; and
 - no fragmentation or reassembly.
 
-This format remains suitable only for the isolated lab milestone. A future
-authenticated protocol must define peer identity, key establishment,
-directional keys, nonce construction, sequence validation, and replay rules
-before use on untrusted networks.
+The encrypted V2 path remains suitable only for the isolated lab milestone: it has no
+rekeying, multi-peer routing, firewall-policy automation, or DNS handling.
 
 ## Pure handshake messages and byte envelopes remain separate
 
-Milestone 2.3 defines these generic transport-neutral values:
+This handshake layer defines these generic transport-neutral values:
 
 ```text
 ClientHello<Payload>  { client_attempt_id, payload }
