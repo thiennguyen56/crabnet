@@ -12,29 +12,27 @@ single-peer lab path and does not replace historical milestone notes.
 - Noise-IK application binding owns the configured TUN and applies/restores the same client routes
   or server forwarding/NAT state as legacy mode; it forwards only after session commitment.
 - `scripts/test-noise-ik-tunnel.sh` proves a committed encrypted overlay ping, MTU boundary,
-  malformed-datagram drop, and continued service. The legacy namespace configs remain explicit V1.
+  malformed-datagram drop, controlled packet-limit close, and route cleanup. The legacy namespace
+  configs remain explicit V1.
+- Noise-IK sessions enforce configured packet/byte limits, idle deadlines, and sequence exhaustion
+  before controlled application cleanup.
 
 ## 1. Adversarial encrypted namespace coverage
 
 Extend the dedicated Noise-IK namespace scenario beyond its current happy-path and malformed-input
-coverage:
-
-- capture and replay an authenticated encrypted datagram and verify replay rejection;
-- tamper with ciphertext and verify authentication failure without ending the session;
-- prove route/NAT installation and reverse-order cleanup in a Noise-IK topology; and
-- preserve the existing legacy namespace test for V1 routing, forwarding, and NAT.
+coverage. `scripts/test-noise-ik-adversarial.sh` covers replay/tamper drops plus routed NAT and
+cleanup; retain it as the regression suite while preserving the legacy namespace test for V1
+routing, forwarding, and NAT.
 
 The Noise-IK test must not silently reuse legacy configurations or assertions.
 
 ## 2. Session lifecycle and rekeying
 
-After encrypted traffic works, define the long-lived session behavior:
+The first lifecycle slice is complete. The remaining long-lived-session behavior is:
 
-- maximum sequence and packet/byte limits;
 - rekey protocol or controlled session restart;
-- idle timeout and orderly shutdown;
 - endpoint migration policy;
-- key erasure during close, failure, and rekey; and
+- explicit key erasure during close, failure, and rekey; and
 - duplicate, delayed, reordered, and lost packet behavior during transitions.
 
 No counter may wrap or silently reuse a nonce. If rekeying is not yet implemented, the safe

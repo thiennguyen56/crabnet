@@ -26,9 +26,8 @@ version 2 handshake codec + adapter
 Noise-IK UDP handshake                       legacy V1 forwarding
 ```
 
-A passing pure handshake test proves state-machine and coordination behavior. A Noise-IK runtime test
-path additionally exercises real UDP handshake framing, but it still does not provide encrypted data
-forwarding.
+A passing pure handshake test proves state-machine and coordination behavior. The Noise-IK runtime
+additionally exercises real UDP handshake framing and, after commitment, encrypted V2 data forwarding.
 
 ## Why there are three layers
 

@@ -2,9 +2,13 @@
 
 Status: **implemented; encrypted data plane and Noise-IK runtime use this provider**
 
+> Historical design reference. The provider, UDP adapter, and encrypted V2 data runtime are active.
+> Future-tense sections about reaching UDP or adding encrypted data describe the completed design
+> process, not current behavior. Use `architecture.md` and `protocol.md` for current behavior.
+
 This document is the implementation contract for Crabnet's first real authenticated handshake
-provider. It selects Noise IK, defines how its two-message handshake fits Crabnet's existing
-four-message coordinator, and identifies the work required before the provider reaches UDP.
+provider. It selects Noise IK and defines how its two-message handshake fits Crabnet's existing
+four-message coordinator.
 
 Nothing here makes the current executable production-safe. The executable has a Noise-IK encrypted data runtime; Version 1 remains an explicit unauthenticated lab protocol, and the fake provider remains test-only.
 

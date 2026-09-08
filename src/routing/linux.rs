@@ -263,6 +263,18 @@ enum ExistingRoute {
   Conflicting,
 }
 
+/// Compares requested ownership fields with a route reported by iproute2.
+///
+/// A route installed with only `via` acquires a kernel-selected output interface;
+/// that derived field is not part of Crabnet's ownership record.
+fn route_matches(route: &IpRoute, gateway: Option<&str>, interface: Option<&str>) -> bool {
+  route.gateway.as_deref() == gateway
+    && match interface {
+      Some(interface) => route.dev.as_deref() == Some(interface),
+      None => true,
+    }
+}
+
 /// Classifies exact-destination routes as missing, identical, or conflicting.
 ///
 /// Any conflicting entry takes precedence over an identical entry.
@@ -279,12 +291,11 @@ fn classify_existing_route(
 
   let identical = routes.iter().any(|route| {
     destination_matches(route.dst.as_deref(), destination)
-      && route.gateway == gateway
-      && route.dev.as_deref() == interface
+      && route_matches(route, gateway.as_deref(), interface)
   });
   let conflicting = routes.iter().any(|route| {
     destination_matches(route.dst.as_deref(), destination)
-      && !(route.gateway == gateway && route.dev.as_deref() == interface)
+      && !route_matches(route, gateway.as_deref(), interface)
   });
 
   if conflicting {
@@ -421,7 +432,12 @@ fn parse_underlay_route(stdout: &str, destination: IpAddr) -> anyhow::Result<Und
 fn destination_matches(actual: Option<&str>, expected: &IpNet) -> bool {
   match actual {
     Some("default") => expected.prefix_len() == 0,
-    Some(actual) => actual == expected.to_string(),
+    Some(actual) => {
+      let actual = actual
+        .parse::<IpNet>()
+        .or_else(|_| actual.parse::<IpAddr>().map(IpNet::from));
+      matches!(actual, Ok(actual) if actual == *expected)
+    }
     None => false,
   }
 }
@@ -719,6 +735,18 @@ mod tests {
     ));
   }
 
+  #[test]
+  fn bare_iproute2_destination_matches_host_network() {
+    assert!(destination_matches(
+      Some("192.0.2.2"),
+      &"192.0.2.2/32".parse().unwrap()
+    ));
+    assert!(!destination_matches(
+      Some("192.0.2.2"),
+      &"192.0.2.0/24".parse().unwrap()
+    ));
+  }
+
   #[tokio::test]
   async fn conflicting_existing_default_route_is_rejected() {
     let operation = RouteOperation::AddRoute {
@@ -758,7 +786,7 @@ mod tests {
     );
 
     let mut backend = backend(vec![
-      success(r#"[{"dst":"10.0.0.0/24","gateway":"172.16.0.1"}]"#),
+      success(r#"[{"dst":"10.0.0.0/24","gateway":"172.16.0.1","dev":"eth0"}]"#),
       success(""),
     ]);
     backend.revert(&applied_gateway()).await.unwrap();

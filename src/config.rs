@@ -35,6 +35,43 @@ pub struct SecurityConfig {
   pub server_public_key: Option<String>,
   #[serde(default)]
   pub allowed_client_public_keys: Vec<String>,
+  pub session_limits: Option<SessionLimitsConfig>,
+}
+
+/// Configures finite limits for one established Noise-IK data session.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SessionLimitsConfig {
+  pub max_outbound_packets: u64,
+  pub max_outbound_plaintext_bytes: u64,
+  pub max_inbound_packets: u64,
+  pub max_inbound_plaintext_bytes: u64,
+  pub idle_timeout_seconds: u64,
+}
+
+impl SessionLimitsConfig {
+  fn validate(&self) -> anyhow::Result<()> {
+    ensure!(
+      self.max_outbound_packets > 0,
+      "security.session_limits.max_outbound_packets must be greater than zero"
+    );
+    ensure!(
+      self.max_outbound_plaintext_bytes > 0,
+      "security.session_limits.max_outbound_plaintext_bytes must be greater than zero"
+    );
+    ensure!(
+      self.max_inbound_packets > 0,
+      "security.session_limits.max_inbound_packets must be greater than zero"
+    );
+    ensure!(
+      self.max_inbound_plaintext_bytes > 0,
+      "security.session_limits.max_inbound_plaintext_bytes must be greater than zero"
+    );
+    ensure!(
+      self.idle_timeout_seconds > 0,
+      "security.session_limits.idle_timeout_seconds must be greater than zero"
+    );
+    Ok(())
+  }
 }
 
 /// Selects which Crabnet endpoint role to run.
@@ -245,8 +282,18 @@ impl Config {
           self.security.allowed_client_public_keys.is_empty(),
           "security.allowed_client_public_keys requires security.mode = noise_ik"
         );
+        ensure!(
+          self.security.session_limits.is_none(),
+          "security.session_limits requires security.mode = noise_ik"
+        );
       }
       SecurityMode::NoiseIk => {
+        self
+          .security
+          .session_limits
+          .as_ref()
+          .context("security.mode = noise_ik requires [security.session_limits]")?
+          .validate()?;
         let private_key_path = self
           .security
           .private_key_path
@@ -429,6 +476,18 @@ fn socket_addr(current: SocketAddr, ip: Option<IpAddr>, port: Option<u16>) -> So
 mod tests {
   use super::*;
 
+  type ZeroLimitCase = (&'static str, fn(&mut SessionLimitsConfig));
+
+  fn session_limits() -> SessionLimitsConfig {
+    SessionLimitsConfig {
+      max_outbound_packets: 100_000,
+      max_outbound_plaintext_bytes: 104_857_600,
+      max_inbound_packets: 100_000,
+      max_inbound_plaintext_bytes: 104_857_600,
+      idle_timeout_seconds: 300,
+    }
+  }
+
   #[test]
   fn parses_client_config() {
     let config: Config = toml::from_str(
@@ -512,6 +571,62 @@ mod tests {
 
     assert_eq!(config.routing, RoutingConfig::default());
     config.validate().unwrap();
+  }
+
+  #[test]
+  fn legacy_mode_rejects_session_limits() {
+    let mut config = Config::default();
+    config.security.session_limits = Some(session_limits());
+
+    let error = config.validate().unwrap_err();
+
+    assert!(error
+      .to_string()
+      .contains("security.session_limits requires security.mode = noise_ik"));
+  }
+
+  #[test]
+  fn noise_ik_mode_requires_session_limits_before_key_loading() {
+    let mut config = Config::default();
+    config.security.mode = SecurityMode::NoiseIk;
+
+    let error = config.validate().unwrap_err();
+
+    assert!(error
+      .to_string()
+      .contains("security.mode = noise_ik requires [security.session_limits]"));
+  }
+
+  #[test]
+  fn session_limits_reject_each_zero_value() {
+    let cases: [ZeroLimitCase; 5] = [
+      ("max_outbound_packets", |limits| {
+        limits.max_outbound_packets = 0;
+      }),
+      ("max_outbound_plaintext_bytes", |limits| {
+        limits.max_outbound_plaintext_bytes = 0;
+      }),
+      ("max_inbound_packets", |limits| {
+        limits.max_inbound_packets = 0;
+      }),
+      ("max_inbound_plaintext_bytes", |limits| {
+        limits.max_inbound_plaintext_bytes = 0;
+      }),
+      ("idle_timeout_seconds", |limits| {
+        limits.idle_timeout_seconds = 0;
+      }),
+    ];
+
+    for (field, make_zero) in cases {
+      let mut limits = session_limits();
+      make_zero(&mut limits);
+
+      let error = limits.validate().unwrap_err();
+
+      assert!(error
+        .to_string()
+        .contains(&format!("security.session_limits.{field}")));
+    }
   }
 
   #[test]
