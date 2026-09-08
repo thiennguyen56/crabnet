@@ -94,4 +94,4 @@ path requires:
 
 - administrator-managed firewall forwarding policy;
 - full-tunnel DNS handling; and
-- rekeying, adversarial integration tests, and multi-peer design before use on untrusted networks.
+- rekeying, multi-peer design, and broader hardening before use on untrusted networks.

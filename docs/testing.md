@@ -44,7 +44,8 @@ Pure handshake coverage is split by responsibility:
 All handshake time is supplied as `Instant`; these tests do not sleep or require sockets. Payload
 and credential debug-redaction tests ensure generic diagnostics do not reveal provider values.
 The pure policies and coordinators are not used by legacy V1 forwarding. Noise-IK provider tests prove the
-real cryptographic exchange in memory; they do not prove encrypted data forwarding or replay protection.
+real cryptographic exchange in memory; privileged namespace tests prove encrypted forwarding and wire-level
+replay/tamper drops.
 
 ## Choosing the right test
 
@@ -52,6 +53,7 @@ real cryptographic exchange in memory; they do not prove encrypted data forwardi
 | --- | --- |
 | Packet framing or size boundary | `cargo test protocol::` |
 | Candidate/session policy | `cargo test session::` |
+| Encrypted session limits and replay state | `cargo test data_plane::session::` |
 | Fake provider transcript | `cargo test crypto::fake::tests` |
 | Client coordinator | `cargo test handshake::client::tests` |
 | Server coordinator | `cargo test handshake::server::tests` |
@@ -97,12 +99,10 @@ sudo scripts/test-noise-ik-tunnel.sh
 ```
 
 It generates throwaway static keys beneath its printed log directory, commits a real Noise-IK
-handshake, uses the application-owned TUN interfaces, proves encrypted overlay ping, injects
-a malformed UDP datagram, verifies its drop in the server log, and proves the established session
-still delivers packets. It does not change host routes, forwarding, or firewall state.
-
-Replay and tamper injection remain covered by the pure data-plane tests and require a follow-up
-raw-packet namespace probe before this script can claim adversarial wire coverage.
+handshake, uses the application-owned TUN interfaces, proves encrypted overlay ping, validates the
+MTU boundary, injects a malformed UDP datagram, and then proves a configured outbound packet limit
+causes controlled client close and route restoration. It does not change host routes, forwarding,
+or firewall state.
 
 ## Privileged adversarial Noise-IK routed test
 

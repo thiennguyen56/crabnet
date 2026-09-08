@@ -24,15 +24,15 @@ Noise-IK provider and encrypted V2 data frames, but that does not make Crabnet p
 - Handshake payload redaction prevents accidental generic `Debug` output, but it is not a complete
   secret-management or side-channel strategy.
 
-Use the namespace test for isolated lab validation only. Do not expose the
+Use the namespace tests for isolated lab validation only. Do not expose the
 current server to an untrusted network or use it to protect sensitive traffic.
-Authentication and encrypted framing must be implemented before expanding the
-deployment scope.
+Authentication, encrypted framing, replay protection, and finite session limits
+are implemented; they do not replace the remaining operational and security work.
 
-## What the pure handshake does improve
+## What the active Noise-IK path improves
 
-Although it does not secure traffic, the pure subsystem establishes implementation rules needed by
-a future real provider:
+The pure subsystem establishes implementation rules, and the active Noise-IK path applies them to
+encrypted traffic:
 
 - untrusted source and attempt metadata is authorized before crypto;
 - server candidates are selected by local source ownership, not a message-supplied candidate ID;
@@ -42,13 +42,12 @@ a future real provider:
 - timeout and shutdown erase matching contexts; and
 - credentials and opaque payloads are redacted from ordinary debug output.
 
-These properties reduce integration risk, but they cannot compensate for a weak or custom
-cryptographic protocol.
+These properties reduce integration risk, but they cannot compensate for missing lifecycle,
+operational, or independent-security-review work.
 
 ## Security work still required
 
-Use the implemented Noise-IK profile with carefully managed keys, then add encrypted data frames,
-unique directional nonces, anti-replay state, rekeying, downgrade protection, resource limits,
-startup/runtime forwarding gates, and
-adversarial integration tests. Firewall
-policy and DNS handling remain separate operator/runtime responsibilities.
+Use the implemented Noise-IK profile with carefully managed keys, then add rekeying or a controlled
+fresh-session restart, explicit key erasure, multi-peer admission, endpoint-migration policy,
+resource/DoS hardening, fuzzing, and independent review. Firewall policy and DNS handling remain
+separate operator/runtime responsibilities.

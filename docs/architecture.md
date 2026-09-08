@@ -39,8 +39,8 @@ Pure handshake and adapter tests
 ```
 
 The vertical runtime path moves real packets and changes Linux network state. The pure handshake
-path moves owned Rust values in memory and changes no OS state. A future transport adapter will
-connect a reviewed protocol to the coordinator; fake crypto must never be used for live security.
+path moves owned Rust values in memory and changes no OS state. The Noise-IK adapter already
+connects the reviewed profile to the coordinator; fake crypto remains test-only.
 
 ## Runtime components
 
@@ -72,7 +72,12 @@ connect a reviewed protocol to the coordinator; fake crypto must never be used f
 - `src/handshake/types.rs`: transport-neutral messages, reports, events, and fatal errors.
 - `src/handshake/adapter.rs`: V2 decode, direction and exact-size validation, coordinator dispatch, and encoding.
 - `src/crypto/noise_ik/`: Noise-IK profile, key loading, and client/server providers.
-- `src/noise_runtime.rs`: Tokio V2 runtime; it commits Noise-IK and then forwards only encrypted data frames using the TUN owned by `Application`.
+- `src/noise_runtime.rs`: Tokio V2 handshake runtime; it converts validated session limits, commits
+  Noise-IK, and transfers the committed transport plus limits to the data plane.
+- `src/data_plane/session.rs`: sequence allocation, replay state, and the established-session
+  lifetime module for packet, byte, and idle limits.
+- `src/data_plane/runtime.rs`: encrypted TUN/UDP forwarding, controlled session close, and the
+  idle-deadline `tokio::select!` branch.
 
 See [`handshake.md`](handshake.md) for the learning-oriented explanation and the coordinator contract. [`diagrams.md`](diagrams.md) provides the current runtime, handshake,
 state-machine, failure, and planned-integration views in one place.
@@ -93,8 +98,11 @@ fails closed on local errors or invariant violations. Successful remote rejectio
 typed drop rather than a fatal local error.
 
 The encrypted data path owns frame encoding, header binding, sequence allocation, replay checks,
-and TUN/UDP forwarding after coordinator commitment. Rekeying, multi-peer routing, and a dedicated
-Noise-IK namespace test remain future work.
+session limits, and TUN/UDP forwarding after coordinator commitment. A controlled limit, idle, or
+sequence-exhaustion close returns normally to `Application`, which restores owned routes,
+forwarding, and NAT. Rekeying and multi-peer routing remain future work. Dedicated basic and
+adversarial Noise-IK namespace tests cover encrypted delivery, replay/tamper drops, routing, NAT,
+and cleanup.
 
 The legacy V1 server intentionally supports one active UDP peer and has no authentication.
 Noise-IK also supports one active peer, but authenticates it with the configured public-key allowlist.
@@ -127,5 +135,6 @@ before removal and proceeds in reverse order. Handshake coordinators similarly o
 crypto instances exclusively: a local failure shuts down both layers and returns the primary error
 plus both cleanup outcomes.
 
-These are related design habits, but they are not the same transaction. Runtime route/NAT cleanup
-is currently independent of pure handshake lifecycle because the subsystems are not integrated.
+These are related design habits, but they are not the same transaction. The committed Noise-IK
+runtime is integrated with application route/NAT cleanup; the pure handshake subsystem remains
+privilege-free and independently testable.

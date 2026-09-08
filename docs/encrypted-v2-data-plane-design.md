@@ -1,6 +1,9 @@
 # Encrypted V2 data-plane design
 
-Status: core encrypted forwarding is implemented. V1 remains an explicit unauthenticated lab mode, and Noise-IK never falls back to V1 plaintext forwarding. Dedicated fake-runtime and namespace coverage remain follow-up work.
+> Historical design reference. Core encrypted forwarding, dedicated namespace coverage, and the
+> first session-limit lifecycle slice are implemented. Some registry, counter, and explicit
+> key-erasure pseudocode below describes a superseded design rather than the current module surface.
+> Use `architecture.md`, `protocol.md`, `configuration.md`, and `testing.md` for current behavior.
 
 ## 1. Scope and fixed decisions
 

@@ -2,12 +2,11 @@
 
 > **A modular, open-source networking framework for building VPNs, overlay networks, and distributed networking systems in Rust.**
 
-Crabnet is a learning-driven Rust/Tokio TUN-over-UDP prototype. It currently
-supports a single unauthenticated UDP peer, binary packet forwarding, logging,
-versioned packet framing, client split/full-tunnel routes, server IPv4
-forwarding, and IPv4 masquerading. Noise-IK uses the V2 UDP adapter, commits the authenticated four-message
-handshake, and forwards only encrypted data frames. Legacy V1 forwarding remains
-a separate explicitly selected mode.
+Crabnet is a Linux/Rust/Tokio TUN-over-UDP learning prototype with two explicit
+lab modes. `legacy` forwards V1 frames for one unauthenticated peer. `noise_ik`
+authenticates one peer with pinned/allowlisted static keys, then forwards
+encrypted V2 data with replay protection and finite session limits. Both modes
+support the same client routing and server IPv4-forwarding/NAT lifecycle.
 
 ## Documentation
 
@@ -22,9 +21,7 @@ a separate explicitly selected mode.
 - [Version 2 handshake framing design](docs/handshake-framing-design.md)
 - [Noise IK provider design](docs/noise-ik-provider-design.md)
 - [Current roadmap](docs/roadmap.md)
-- [Encrypted V2 data-plane design](docs/encrypted-v2-data-plane-design.md)
-- [Encrypted lab guide](docs/encrypted-lab-guide.md)
-- [Session limits design](docs/session-limits-design.md)
+- [Detailed encrypted V2 design history](docs/encrypted-v2-data-plane-design.md)
 
 ## Current milestone status
 
@@ -36,6 +33,7 @@ a separate explicitly selected mode.
 | Handshake coordination | Complete pure subsystem | Four fake handshake messages establish matching metadata |
 | Version 2 handshake framing and adapter | Integrated handshake runtime | Exact bounded bytes, direction checks, provider dispatch, and ciphertext encoding |
 | Noise-IK authentication and encrypted data | Active runtime | Commits Noise-IK, binds the authenticated V2 header, and forwards directional encrypted packets with replay checks |
+| Noise-IK session lifetime | Active runtime | Enforces configured packet, byte, sequence, and idle boundaries before normal cleanup |
 | Production VPN security | Not implemented | No rekeying, DNS handling, firewall-policy automation, or multi-peer support |
 
 Use [the handshake guide](docs/handshake.md) to understand the state machines and runtime boundary,

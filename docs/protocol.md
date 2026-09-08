@@ -4,7 +4,7 @@ This document distinguishes the legacy data protocol from the integrated Noise-I
 
 | Protocol layer | Status |
 | --- | --- |
-| Version 1 data frame below | Implemented and used by the executable |
+| Version 1 data frame below | Implemented in explicitly selected legacy mode |
 | Four-message fake handshake | Implemented only as owned in-memory Rust values |
 | Version 2 handshake framing codec | Implemented and used by the Noise-IK runtime |
 | Authenticated encrypted V2 data protocol | Implemented for one committed Noise-IK peer |
@@ -60,10 +60,10 @@ valid frame. Empty, oversized, malformed, and unsupported frames cannot select
 the peer. Once selected, later datagrams from other addresses are rejected
 without replacing it.
 
-## Version 2 handshake frame
+## Version 2 handshake wire envelope
 
-The pure version 2 codec defines a bounded byte envelope for the four handshake messages. It does
-not select a cryptographic protocol, interpret provider payloads, or send datagrams.
+The version 2 codec defines a bounded byte envelope for the four handshake messages. The codec is
+pure; the Noise-IK adapter and runtime perform UDP I/O and authenticate the owned payloads.
 
 All multi-byte integers use network byte order.
 
@@ -127,27 +127,24 @@ no magic bytes, message numbers, field widths, length encoding, fragmentation, r
 downgrade behavior. `CandidateId` is server-local and must not be copied into a wire format merely
 because the fake provider uses it internally.
 
-The V2 codec can wrap an attempt ID and already-serialized opaque bytes, but a future provider
-adapter must perform that conversion. The in-memory flow proves coordinator ordering:
+The V2 codec wraps an attempt ID and already-serialized opaque bytes; the Noise-IK adapter performs
+that conversion in the active runtime. The in-memory flow separately proves coordinator ordering:
 
 ```text
 ClientHello → ServerHello → ClientFinish → ServerFinish
 ```
 
-## Remaining requirements for an authenticated version 2 runtime
+## Remaining encrypted V2 lifecycle requirements
 
-Before the V2 codec reaches the coordinator or runtime, the protocol design must specify:
+The active runtime already authenticates the handshake, binds data headers, derives directional
+transport state, validates sequences, and enforces a replay window. Before use beyond the isolated
+lab, it still needs:
 
-- reviewed authentication and key-agreement semantics;
-- authenticated binding of the outer frame fields, roles, and selected configuration;
-- an operational opaque-payload limit with path-MTU reasoning;
-- how identities and the UDP endpoint are bound to the transcript;
-- how an established `SessionId` selects encrypted data state;
-- directional key and nonce derivation;
-- monotonically validated sequence numbers and replay windows;
-- retransmission, duplicate, reordering, timeout, and denial-of-service behavior;
-- rekeying and key-erasure rules; and
-- coexistence or migration behavior for version 1.
+- rekeying or controlled fresh-session restart;
+- explicit key-erasure and shutdown-notification semantics;
+- multi-peer identity/session management and endpoint migration;
+- denial-of-service hardening, rate-limited diagnostics, and fuzzing; and
+- a migration/version-negotiation policy for future versions.
 
 Until all of those are implemented and tested, version 1 must continue to be described as
 unauthenticated lab framing.
