@@ -17,12 +17,9 @@ single-peer lab path and does not replace historical milestone notes.
 ## 1. Adversarial encrypted namespace coverage
 
 Extend the dedicated Noise-IK namespace scenario beyond its current happy-path and malformed-input
-coverage:
-
-- capture and replay an authenticated encrypted datagram and verify replay rejection;
-- tamper with ciphertext and verify authentication failure without ending the session;
-- prove route/NAT installation and reverse-order cleanup in a Noise-IK topology; and
-- preserve the existing legacy namespace test for V1 routing, forwarding, and NAT.
+coverage. `scripts/test-noise-ik-adversarial.sh` covers replay/tamper drops plus routed NAT and
+cleanup; retain it as the regression suite while preserving the legacy namespace test for V1
+routing, forwarding, and NAT.
 
 The Noise-IK test must not silently reuse legacy configurations or assertions.
 

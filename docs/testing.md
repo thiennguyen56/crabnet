@@ -104,6 +104,21 @@ still delivers packets. It does not change host routes, forwarding, or firewall 
 Replay and tamper injection remain covered by the pure data-plane tests and require a follow-up
 raw-packet namespace probe before this script can claim adversarial wire coverage.
 
+## Privileged adversarial Noise-IK routed test
+
+The separate adversarial test uses the four-namespace routed/NAT topology and a controlled UDP
+relay. It captures one real encrypted client data datagram, replays it, holds a fresh datagram
+before corrupting it, and proves both drops leave the committed session usable:
+
+```bash
+cargo build --bins
+sudo scripts/test-noise-ik-adversarial.sh
+```
+
+It also checks the Noise-IK endpoint exclusion, client TUN default route, server route, forwarding,
+NAT installation, translated HTTP source, and reverse-order cleanup. The relay is test-only and is
+not part of the Crabnet executable.
+
 The default route and NAT table exist only inside their test namespaces. The
 script never changes the host default route, forwarding state, or firewall.
 

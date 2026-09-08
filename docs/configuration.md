@@ -154,12 +154,23 @@ mode = "legacy" # or "noise_ik"
 private_key_path = "/etc/crabnet/noise-ik-private.key"
 server_public_key = "<64 lowercase hex characters>" # client only
 allowed_client_public_keys = ["<64 lowercase hex characters>"] # server only
+
+[security.session_limits] # required when mode = "noise_ik"
+max_outbound_packets = 100000
+max_outbound_plaintext_bytes = 104857600
+max_inbound_packets = 100000
+max_inbound_plaintext_bytes = 104857600
+idle_timeout_seconds = 300
 ```
 
 Noise-IK requires a 32-byte private key encoded as exactly 64 lowercase hexadecimal characters.
 The file must not be readable by group or other users. Clients require one pinned server public key;
 servers require at least one unique allowed client public key. Noise-IK configuration is validated
 before any TUN, route, NAT, or forwarding state is created.
+
+Each Noise-IK endpoint must set finite per-session limits. Packet and byte limits count successful
+plaintext IP forwarding in their respective direction; the timeout is in seconds since the most
+recent successful send or authenticated TUN delivery. Every value must be greater than zero.
 
 Noise-IK creates the configured TUN and applies the same client routes or server forwarding/NAT
 configuration as legacy mode. It forwards only committed encrypted V2 data; this does not make V1

@@ -4,8 +4,8 @@ set -Eeuo pipefail
 
 CLIENT_NS="cn-noise-client"
 SERVER_NS="cn-noise-server"
-CLIENT_VETH="cn-noise-client-veth"
-SERVER_VETH="cn-noise-server-veth"
+CLIENT_VETH="cn-n-c-veth"
+SERVER_VETH="cn-n-s-veth"
 CLIENT_PID=""
 SERVER_PID=""
 CAPTURE_PID=""
@@ -39,7 +39,7 @@ if (( EUID != 0 )); then
   echo "Run explicitly with sudo: sudo scripts/test-noise-ik-tunnel.sh" >&2
   exit 1
 fi
-for command in ip python3 ping grep sed mktemp tr; do require "$command"; done
+for command in ip python3 ping grep sed mktemp sleep tr; do require "$command"; done
 for namespace in "$CLIENT_NS" "$SERVER_NS"; do
   if ip netns list | awk '{ print $1 }' | grep -Fxq "$namespace"; then
     echo "Refusing to use existing namespace: $namespace" >&2
@@ -74,6 +74,12 @@ mtu = 1400
 mode = "noise_ik"
 private_key_path = "$KEY_DIR/server.key"
 allowed_client_public_keys = ["$CLIENT_PUBLIC"]
+[security.session_limits]
+max_outbound_packets = 8
+max_outbound_plaintext_bytes = 104857600
+max_inbound_packets = 100000
+max_inbound_plaintext_bytes = 104857600
+idle_timeout_seconds = 300
 EOF
 cat > "$LOG_DIR/client.toml" <<EOF
 log_level = "debug"
@@ -90,6 +96,12 @@ mtu = 1400
 mode = "noise_ik"
 private_key_path = "$KEY_DIR/client.key"
 server_public_key = "$SERVER_PUBLIC"
+[security.session_limits]
+max_outbound_packets = 100000
+max_outbound_plaintext_bytes = 104857600
+max_inbound_packets = 100000
+max_inbound_plaintext_bytes = 104857600
+idle_timeout_seconds = 300
 EOF
 
 CURRENT_STAGE="creating isolated namespaces"
@@ -127,7 +139,8 @@ run ip -n "$SERVER_NS" link show crabnet0
 
 CURRENT_STAGE="proving encrypted packet delivery at the MTU boundary"
 run ip netns exec "$CLIENT_NS" ping -c 3 -W 2 -I 10.0.0.2 -s 1372 10.0.0.1
-if ip netns exec "$CLIENT_NS" ping -c 1 -W 1 -I 10.0.0.2 -s 1373 10.0.0.1; then
+# -M do prevents Linux from fragmenting the 1,401-byte IPv4 packet.
+if ip netns exec "$CLIENT_NS" ping -c 1 -W 1 -M do -I 10.0.0.2 -s 1373 10.0.0.1; then
   echo "MTU-plus-one encrypted packet unexpectedly succeeded" >&2
   exit 1
 fi
@@ -138,11 +151,35 @@ sleep 0.2
 run grep -F "dropping malformed encrypted datagram" "$LOG_DIR/server.log"
 run ip netns exec "$CLIENT_NS" ping -c 2 -W 2 -I 10.0.0.2 10.0.0.1
 
-CURRENT_STAGE="graceful shutdown"
-run kill -INT "$CLIENT_PID"
-run kill -INT "$SERVER_PID"
+CURRENT_STAGE="enforcing the configured outbound packet limit"
+for _ in {1..20}; do
+  if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
+    break
+  fi
+  ip netns exec "$CLIENT_NS" ping -c 1 -W 1 -I 10.0.0.2 10.0.0.1 >/dev/null 2>&1 || true
+  sleep 0.1
+done
+if kill -0 "$CLIENT_PID" 2>/dev/null; then
+  echo "client did not exit after reaching its outbound packet limit" >&2
+  exit 1
+fi
 run wait "$CLIENT_PID"
 CLIENT_PID=""
+run grep -F "closing encrypted data session: OutboundPacketLimit" "$LOG_DIR/client.log"
+[[ -z "$(ip -n "$CLIENT_NS" route show exact 192.0.2.2/32)" ]] || {
+  echo "client endpoint route remains after controlled session close" >&2
+  exit 1
+}
+[[ "$(ip -n "$CLIENT_NS" route show default)" != *"dev crabnet0"* ]] || {
+  echo "client default route remains after controlled session close" >&2
+  exit 1
+}
+
+CURRENT_STAGE="graceful shutdown"
+if [[ -n "$CLIENT_PID" ]] && kill -0 "$CLIENT_PID" 2>/dev/null; then
+  run kill -INT "$CLIENT_PID"
+fi
+run kill -INT "$SERVER_PID"
 run wait "$SERVER_PID"
 SERVER_PID=""
-echo "PASS: committed Noise-IK handshake, encrypted TUN delivery, malformed-datagram drop, and continued service succeeded."
+echo "PASS: committed Noise-IK handshake, encrypted TUN delivery, malformed-datagram drop, and controlled session-limit cleanup succeeded."

@@ -23,6 +23,8 @@ a separate explicitly selected mode.
 - [Noise IK provider design](docs/noise-ik-provider-design.md)
 - [Current roadmap](docs/roadmap.md)
 - [Encrypted V2 data-plane design](docs/encrypted-v2-data-plane-design.md)
+- [Encrypted lab guide](docs/encrypted-lab-guide.md)
+- [Session limits design](docs/session-limits-design.md)
 
 ## Current milestone status
 

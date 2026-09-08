@@ -20,7 +20,10 @@ use crate::{
     server::ServerProvider,
   },
   data_plane::{
-    crypto::DirectionalTransport, frame::DataFrameCodec, runtime, session::EstablishedDataSession,
+    crypto::DirectionalTransport,
+    frame::DataFrameCodec,
+    runtime,
+    session::{EstablishedDataSession, SessionLifetime, SessionLimits},
   },
   handshake::{
     adapter::{receive_client_frame, receive_server_frame, start_client_frame},
@@ -51,11 +54,13 @@ pub(crate) enum NoiseIkRuntime {
     server_addr: SocketAddr,
     coordinator: Box<ClientHandshakeCoordinator<ClientProvider>>,
     tun: TunDevice,
+    session_limits: SessionLimits,
   },
   Server {
     socket: UdpSocket,
     coordinator: Box<ServerHandshakeCoordinator<ServerProvider>>,
     tun: TunDevice,
+    session_limits: SessionLimits,
   },
 }
 
@@ -65,6 +70,18 @@ impl NoiseIkRuntime {
     security: SecurityConfig,
     tun: TunDevice,
   ) -> anyhow::Result<Self> {
+    let configured_limits = security
+      .session_limits
+      .as_ref()
+      .context("Noise-IK session limits are required")?;
+    let session_limits = SessionLimits::new(
+      configured_limits.max_outbound_packets,
+      configured_limits.max_outbound_plaintext_bytes,
+      configured_limits.max_inbound_packets,
+      configured_limits.max_inbound_plaintext_bytes,
+      Duration::from_secs(configured_limits.idle_timeout_seconds),
+    )
+    .map_err(|error| anyhow::anyhow!("construct Noise-IK session limits: {error:?}"))?;
     let private_path = security
       .private_key_path
       .as_deref()
@@ -98,6 +115,7 @@ impl NoiseIkRuntime {
           server_addr,
           coordinator: Box::new(coordinator),
           tun,
+          session_limits,
         })
       }
       ModeConfig::Server { bind_addr } => {
@@ -120,6 +138,7 @@ impl NoiseIkRuntime {
           socket,
           coordinator: Box::new(coordinator),
           tun,
+          session_limits,
         })
       }
     }
@@ -134,6 +153,7 @@ impl NoiseIkRuntime {
         server_addr,
         mut coordinator,
         tun,
+        session_limits,
       } => {
         let report = start_client_frame(&mut coordinator, &codec, Instant::now())
           .map_err(|e| anyhow::anyhow!("start Noise-IK client handshake: {e:?}"))?;
@@ -196,6 +216,7 @@ impl NoiseIkRuntime {
               metadata,
               server_addr,
               DirectionalTransport::new(transport),
+              SessionLifetime::new(Instant::now(), session_limits),
             );
             return runtime::run(socket, tun, codec, session).await;
           }
@@ -205,6 +226,7 @@ impl NoiseIkRuntime {
         socket,
         mut coordinator,
         tun,
+        session_limits,
       } => {
         let mut buffer = vec![0_u8; codec.max_datagram_len() + 1];
         loop {
@@ -277,6 +299,7 @@ impl NoiseIkRuntime {
               metadata,
               peer_endpoint,
               DirectionalTransport::new(transport),
+              SessionLifetime::new(Instant::now(), session_limits),
             );
             return runtime::run(socket, tun, codec, session).await;
           }

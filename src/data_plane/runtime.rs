@@ -1,5 +1,7 @@
 //! Tokio encrypted V2 forwarding loop.
 
+use std::time::Instant;
+
 use anyhow::{anyhow, Context};
 use tokio::net::UdpSocket;
 
@@ -7,10 +9,18 @@ use crate::{
   data_plane::{
     crypto::DecryptOutcome,
     frame::{header_binding_bytes, DataFrameCodec},
-    session::{EstablishedDataSession, ReplayDecision},
+    session::{
+      DataSessionError, EstablishedDataSession, ReplayDecision, SessionCloseReason,
+      SessionDecision, TrafficDirection,
+    },
   },
   tun::TunDevice,
 };
+
+fn controlled_close(reason: SessionCloseReason) -> anyhow::Result<()> {
+  log::info!("closing encrypted data session: {reason:?}");
+  Ok(())
+}
 
 /// Forwards packets for one committed Noise-IK session until Ctrl-C or a local failure.
 pub(crate) async fn run(
@@ -31,15 +41,51 @@ pub(crate) async fn run(
   tokio::pin!(shutdown);
 
   loop {
+    match session
+      .expire_if_due(Instant::now())
+      .map_err(|error| anyhow!("check encrypted session idle deadline: {error:?}"))?
+    {
+      SessionDecision::Permit => {}
+      SessionDecision::Close(reason) => return controlled_close(reason),
+    }
+    let deadline = session
+      .next_deadline()
+      .map_err(|error| anyhow!("get encrypted session idle deadline: {error:?}"))?
+      .ok_or_else(|| anyhow!("established encrypted session has no idle deadline"))?;
+
     tokio::select! {
-      _ = &mut shutdown => return Ok(()),
+      biased;
+      _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+        match session
+          .expire_if_due(Instant::now())
+          .map_err(|error| anyhow!("expire encrypted session idle deadline: {error:?}"))?
+        {
+          SessionDecision::Permit => continue,
+          SessionDecision::Close(reason) => return controlled_close(reason),
+        }
+      }
+      _ = &mut shutdown => return controlled_close(SessionCloseReason::LocalShutdown),
       read = tun.read_packet(&mut tun_buffer) => {
         let length = read.context("read encrypted-mode TUN packet")?;
         if length == 0 || length > codec.maximum_plaintext_payload() {
           log::warn!("dropping invalid local TUN packet of {length} bytes");
           continue;
         }
-        let sequence = session.allocate_send_sequence().map_err(|error| anyhow!("allocate encrypted send sequence: {error:?}"))?;
+        let plaintext_bytes = u64::try_from(length).context("convert outbound plaintext length")?;
+        match session
+          .permit(TrafficDirection::Outbound, plaintext_bytes, Instant::now())
+          .map_err(|error| anyhow!("apply outbound encrypted session limits: {error:?}"))?
+        {
+          SessionDecision::Permit => {}
+          SessionDecision::Close(reason) => return controlled_close(reason),
+        }
+        let sequence = match session.allocate_send_sequence() {
+          Ok(sequence) => sequence,
+          Err(DataSessionError::SendSequenceExhausted) => {
+            return controlled_close(SessionCloseReason::SendSequenceExhausted);
+          }
+          Err(error) => return Err(anyhow!("allocate encrypted send sequence: {error:?}")),
+        };
         let header = codec.build_data_header(session.metadata.session_id, session.send_direction, sequence, length)
           .map_err(|error| anyhow!("build encrypted data header: {error:?}"))?;
         let header_bytes = header_binding_bytes(&header);
@@ -50,7 +96,10 @@ pub(crate) async fn run(
           .map_err(|error| anyhow!("encode encrypted V2 data frame: {error:?}"))?;
         let sent = socket.send_to(&frame[..frame_length], session.peer_endpoint).await
           .with_context(|| format!("send encrypted V2 datagram to {}", session.peer_endpoint))?;
-        if sent != frame_length { return Err(anyhow!("partial encrypted UDP send: sent {sent} of {frame_length} bytes")); }
+        if sent != frame_length { return Err(anyhow!("partial encrypted UDP send: sent {sent} of {frame_length} bytes")); };
+        session
+          .record_success(TrafficDirection::Outbound, plaintext_bytes, Instant::now())
+          .map_err(|error| anyhow!("record successful outbound encrypted forwarding: {error:?}"))?;
       }
       received = socket.recv_from(&mut udp_buffer) => {
         let (length, source) = received.context("receive encrypted V2 datagram")?;
@@ -63,7 +112,18 @@ pub(crate) async fn run(
         let plaintext = match session.transport.decrypt(frame.header().sequence(), &header_bytes, frame.ciphertext()) { DecryptOutcome::Plaintext(plaintext) => plaintext, DecryptOutcome::AuthenticationFailure | DecryptOutcome::HeaderBindingFailure => { log::warn!("dropping unauthenticated encrypted datagram"); continue; } };
         session.replay_window.commit(frame.header().sequence()).map_err(|error| anyhow!("commit encrypted replay state: {error:?}"))?;
         if plaintext.is_empty() || plaintext.len() > codec.maximum_plaintext_payload() { log::warn!("dropping invalid authenticated inner packet"); continue; }
+        let plaintext_bytes = u64::try_from(plaintext.len()).context("convert inbound plaintext length")?;
+        match session
+          .permit(TrafficDirection::Inbound, plaintext_bytes, Instant::now())
+          .map_err(|error| anyhow!("apply inbound encrypted session limits: {error:?}"))?
+        {
+          SessionDecision::Permit => {}
+          SessionDecision::Close(reason) => return controlled_close(reason),
+        }
         tun.write_packet(&plaintext).await.context("write decrypted TUN packet")?;
+        session
+          .record_success(TrafficDirection::Inbound, plaintext_bytes, Instant::now())
+          .map_err(|error| anyhow!("record successful inbound encrypted forwarding: {error:?}"))?;
       }
     }
   }
